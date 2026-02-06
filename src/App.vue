@@ -38,7 +38,11 @@ onMounted(() => {
   timer = window.setInterval(updateClock, 1000);
   fetchQuote();
   const savedTheme = localStorage.getItem("meow-theme");
-  if (savedTheme) isNight.value = savedTheme === "night";
+  if (savedTheme) {
+    isNight.value = savedTheme === "night";
+  } else if (window.matchMedia) {
+    isNight.value = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
   loadGiscus();
 });
 
@@ -238,6 +242,15 @@ watch(isNight, () => {
                 href="mailto:meowhuan@qq.com"
               >
                 Email me
+              </a>
+              <a
+                class="meow-btn-ghost"
+                :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+                href="https://list.meowra.cn"
+                target="_blank"
+                rel="noreferrer"
+              >
+                OpenList / 下载站
               </a>
               <a
                 class="meow-btn-ghost"
@@ -463,6 +476,12 @@ watch(isNight, () => {
 
 .cord-switch-night .cord-label {
   color: #b8a6d8;
+}
+
+@media (max-width: 640px) {
+  .cord-switch {
+    right: 100px;
+  }
 }
 
 </style>
