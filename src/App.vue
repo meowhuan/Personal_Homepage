@@ -6,9 +6,6 @@ const date = ref("");
 const calendar = ref({ day: "", month: "", weekday: "" });
 let timer = 0;
 const isNight = ref(false);
-const feedCount = ref(0);
-const hearts = ref([]);
-let heartId = 0;
 const quoteText = ref("加载中…");
 const quoteFrom = ref("");
 const quoteError = ref(false);
@@ -42,8 +39,6 @@ onMounted(() => {
   fetchQuote();
   const savedTheme = localStorage.getItem("meow-theme");
   if (savedTheme) isNight.value = savedTheme === "night";
-  const savedFeed = localStorage.getItem("meow-feed-count");
-  if (savedFeed) feedCount.value = Number(savedFeed);
   loadGiscus();
 });
 
@@ -77,20 +72,6 @@ const fetchQuote = () => {
 const toggleTheme = () => {
   isNight.value = !isNight.value;
   localStorage.setItem("meow-theme", isNight.value ? "night" : "day");
-};
-
-const persistFeed = () => {
-  localStorage.setItem("meow-feed-count", String(feedCount.value));
-};
-
-const feedCat = () => {
-  feedCount.value += 1;
-  persistFeed();
-  const id = heartId++;
-  hearts.value.push(id);
-  setTimeout(() => {
-    hearts.value = hearts.value.filter((h) => h !== id);
-  }, 1400);
 };
 
 const loadGiscus = () => {
@@ -376,39 +357,25 @@ watch(isNight, () => {
         <section id="guestbook" class="mt-16">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <h2 class="font-display text-2xl" :class="isNight ? 'text-meow-night-ink' : ''">互动留言板</h2>
-            <div class="flex items-center gap-2">
-              <button
-                class="meow-btn-primary px-4 py-2 text-xs"
-                :class="isNight ? 'bg-meow-night-accent text-meow-night-bg' : ''"
-                type="button"
-                @click="feedCat"
-              >
-                喂小猫 +1
-              </button>
-              <span class="text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                已喂食 {{ feedCount }} 次
-              </span>
-            </div>
           </div>
           <div
-            class="relative mt-4 overflow-hidden rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)] transition-colors duration-700 ease-in-out"
+            class="relative mt-4 rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)] transition-colors duration-700 ease-in-out"
             :class="isNight ? 'bg-meow-night-card/80' : 'bg-white/70'"
           >
-            <div class="pointer-events-none absolute inset-0">
-              <span
-                v-for="id in hearts"
-                :key="id"
-                class="absolute bottom-4 left-6 animate-heart"
-              >
-                💗
-              </span>
-            </div>
             <div id="giscus" class="relative z-1"></div>
           </div>
         </section>
 
         <footer class="mt-16 text-center text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-          © 2026 Meowhuan. 保持好奇，慢慢来。
+          © 2026 Meowhuan. 保持好奇，慢慢来。 ·
+          <a
+            class="underline underline-offset-4"
+            href="https://github.com/meowhuan/Personal_Homepage/"
+            target="_blank"
+            rel="noreferrer"
+          >
+          GitHub 
+          </a>
         </footer>
       </div>
     </div>
@@ -498,21 +465,4 @@ watch(isNight, () => {
   color: #b8a6d8;
 }
 
-@keyframes heartFloat {
-  0% {
-    opacity: 0;
-    transform: translateY(0) scale(0.6);
-  }
-  30% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-80px) scale(1.2);
-  }
-}
-
-.animate-heart {
-  animation: heartFloat 1.4s ease forwards;
-}
 </style>
