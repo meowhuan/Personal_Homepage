@@ -27,6 +27,8 @@
   outline: none !important;
   border-radius: 12px !important;
   min-height: 100px !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
 }
 
 /* 3. 解决工具栏与 Aa 尺寸 */
