@@ -49,12 +49,43 @@
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  border-radius: 8px !important;
-  background: transparent !important;
+  border-radius: 999px !important;
+  border: 1px solid #e9d9ea !important;
+  background: #fff1f7 !important;
+  color: #6b5f57 !important;
+  box-shadow: none !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+}
+
+.gsc-comment-box-buttons button:hover,
+.gsc-comment-box-back-to-markdown:hover {
+  background: #ffe2f0 !important;
+  border-color: #ff7ab6 !important;
+  color: #2b1d2a !important;
+}
+
+/* Tabs 组件化 */
+.gsc-comment-box-tabs button {
+  border: none !important;
+  border-radius: 999px !important;
+  padding: 6px 16px !important;
+  font-weight: 500 !important;
+  background: #f4ecf6 !important;
+  color: #7e6a86 !important;
+  margin-right: 8px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+  box-shadow: none !important;
+}
+
+.gsc-comment-box-tabs button[aria-selected="true"] {
+  background-color: #2b1d2a !important;
+  color: #ffffff !important;
 }
 
 /* 4. 评论按钮：彻底消灭黑线 (Border + Box-shadow) */
-.gsc-comment-box-submit {
+.gsc-comment-box-submit,
+.gsc-comment-box-bottom button[type="submit"],
+.gsc-comment-box-bottom .btn-primary {
   border: none !important;
   outline: none !important;
   box-shadow: none !important; /* 关键：抹除模拟边框的阴影 */
@@ -63,7 +94,7 @@
   border-radius: 999px !important;
   padding: 6px 20px !important;
   font-weight: bold !important;
-  transition: transform 0.2s ease !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease, transform 0.2s ease !important;
 }
 
 .gsc-comment-box-submit:focus, 
@@ -72,6 +103,16 @@
   outline: none !important;
   box-shadow: none !important;
   border: none !important;
+}
+
+.gsc-comment-box-bottom button[type="submit"]:hover,
+.gsc-comment-box-bottom .btn-primary:hover {
+  background-color: #1f1a17 !important;
+}
+
+.gsc-comment-box-bottom button[type="submit"]:active,
+.gsc-comment-box-bottom .btn-primary:active {
+  transform: translateY(1px);
 }
 
 /* 5. 退出登录按钮组件化 */
