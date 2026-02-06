@@ -3,7 +3,7 @@
   --color-border-muted: transparent !important;
 }
 
-/* 1. 全局去线：移除所有黑框 */
+/* 1. 全局去线：移除所有容器边框 */
 .gsc-main, .gsc-header, .gsc-comments, .gsc-footer,
 .gsc-comment, .gsc-comment-header, .gsc-comment-content,
 .gsc-comment-box, .gsc-comment-box-main, .gsc-comment-box-tabs {
@@ -12,21 +12,27 @@
   box-shadow: none !important;
 }
 
-/* 2. 输入区组件化 */
+/* 2. 输入区域组件化：确保物理尺寸不缩水 */
 .gsc-comment-box-main {
+  box-sizing: border-box !important;
   background-color: #fdf6f9 !important;
   border-radius: 20px !important;
   padding: 8px !important;
+  width: 100% !important;
 }
 
 .gsc-comment-box-textarea {
+  box-sizing: border-box !important;
   background-color: #ffffff !important;
   border: 2px solid transparent !important;
   border-radius: 12px !important;
-  margin-top: 4px !important;
+  padding: 12px !important;
+  width: 100% !important;
+  min-height: 100px !important;
+  outline: none !important;
 }
 
-/* 3. 统一工具栏图标尺寸（解决 Aa 变大问题） */
+/* 3. 统一工具栏：解决 Aa 尺寸与位置 */
 .gsc-comment-box-buttons {
   display: flex !important;
   align-items: center !important;
@@ -37,49 +43,35 @@
 .gsc-comment-box-back-to-markdown {
   width: 32px !important;
   height: 32px !important;
-  min-width: 0 !important; /* 关键：防止 Aa 撑开 */
-  padding: 0 !important;
+  min-width: 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
   border-radius: 8px !important;
-  background: transparent !important;
 }
 
-/* 4. Tab 切换：严格对齐阳间模式位置 */
-.gsc-comment-box-tabs {
-  display: flex !important;
-  border-bottom: none !important;
-  margin-bottom: 8px !important;
-}
-
-.gsc-comment-box-tabs button {
+/* 4. 评论按钮：彻底消灭黑线 (Border + Box-shadow) */
+.gsc-comment-box-submit {
   border: none !important;
-  border-radius: 999px !important;
-  padding: 6px 16px !important;
-  background: #f4ecf6 !important;
-  margin-right: 8px !important;
-  font-size: 13px !important;
-}
-
-.gsc-comment-box-tabs button[aria-selected="true"] {
+  outline: none !important;
+  box-shadow: none !important; /* 关键：抹除模拟边框的阴影 */
   background-color: #2b1d2a !important;
   color: #ffffff !important;
+  border-radius: 999px !important;
+  padding: 6px 20px !important;
+  font-weight: bold !important;
+  transition: transform 0.2s ease !important;
 }
 
-/* 5. 底部按钮组件化（评论 & 退出） */
-.gsc-comment-box-footer {
-  border-top: none !important;
-  padding: 8px 4px !important;
+.gsc-comment-box-submit:focus, 
+.gsc-comment-box-submit:active,
+.gsc-comment-box-submit:hover {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 
-.gsc-comment-box-bottom {
-  display: flex !important;
-  justify-content: space-between !important;
-  align-items: center !important;
-}
-
-/* 退出登录样式 */
+/* 5. 退出登录按钮组件化 */
 .gsc-comment-box-bottom button[data-action="sign-out"], 
 .btn-plain {
   border: 1px solid #e9d9ea !important;
@@ -87,14 +79,5 @@
   border-radius: 999px !important;
   padding: 4px 14px !important;
   font-size: 12px !important;
-  color: #6b5f57 !important;
-}
-
-/* 评论按钮样式 */
-.gsc-comment-box-submit {
-  border-radius: 999px !important;
-  padding: 6px 20px !important;
-  background-color: #2b1d2a !important;
-  color: #ffffff !important;
-  border: none !important;
+  box-shadow: none !important;
 }

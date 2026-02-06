@@ -3,37 +3,48 @@
   --color-border-muted: transparent !important;
 }
 
-/* 1. 移除黑夜模式多余线条 */
+/* 1. 去线化 */
 .gsc-main, .gsc-comment, .gsc-comment-box-main, .gsc-comment-box-tabs {
   border: none !important;
   box-shadow: none !important;
 }
 
-/* 2. 深度对齐 Aa 与工具栏（解决尺寸不一） */
+/* 2. 深度同步输入区：解决“缩水”问题 */
+.gsc-comment-box-main {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  background-color: #1a1a2e !important;
+  border-radius: 20px !important;
+  padding: 8px !important; /* 严格对齐阳间 */
+}
+
+.gsc-comment-box-textarea {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  padding: 12px !important; /* 严格对齐阳间 */
+  background-color: #121221 !important;
+  border: none !important;
+  outline: none !important;
+}
+
+/* 3. 解决工具栏与 Aa 尺寸 */
 .gsc-comment-box-buttons button, 
 .gsc-comment-box-back-to-markdown {
   width: 32px !important;
   height: 32px !important;
-  min-width: 0 !important; /* 强制对齐 */
-  padding: 0 !important;
+  min-width: 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
   background: transparent !important;
 }
 
-/* 3. 严格同步 Tab 位置（解决偏移） */
-.gsc-comment-box-tabs {
-  margin-bottom: 8px !important;
-  border: none !important;
-}
-
+/* 4. 同步 Tab 按钮样式 */
 .gsc-comment-box-tabs button {
   background: #2a2447 !important;
   color: #b8a6d8 !important;
   border-radius: 999px !important;
   padding: 6px 16px !important;
-  font-size: 13px !important;
   margin-right: 8px !important;
 }
 
@@ -42,25 +53,29 @@
   color: #1a1a2e !important;
 }
 
-/* 4. 输入框深度组件化 */
-.gsc-comment-box-main {
-  background-color: #1a1a2e !important;
-  border-radius: 20px !important;
+/* 5. 底部组件化：评论按钮抹除黑线 */
+.gsc-comment-box-submit {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important; 
+  background-color: #88f3ff !important;
+  color: #1a1a2e !important;
+  border-radius: 999px !important;
+  padding: 6px 20px !important;
 }
 
-/* 5. 底部按钮组件化同步（修复不生效问题） */
+.gsc-comment-box-submit:focus,
+.gsc-comment-box-submit:active {
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* 退出登录 */
 .gsc-comment-box-bottom button[data-action="sign-out"] {
   background: #241f3d !important;
   border: 1px solid #332b55 !important;
   color: #b8a6d8 !important;
   border-radius: 999px !important;
   padding: 4px 14px !important;
-  font-size: 12px !important;
-}
-
-.gsc-comment-box-submit {
-  background-color: #88f3ff !important;
-  color: #1a1a2e !important;
-  border-radius: 999px !important;
-  padding: 6px 20px !important;
+  box-shadow: none !important;
 }
