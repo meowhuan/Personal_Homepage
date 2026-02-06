@@ -3,44 +3,38 @@
   --color-border-muted: transparent !important;
 }
 
-/* 1. 去线与背景重置 */
+/* 1. 移除黑夜模式多余线条 */
 .gsc-main, .gsc-comment, .gsc-comment-box-main, .gsc-comment-box-tabs {
   border: none !important;
   box-shadow: none !important;
 }
 
-/* 2. 输入区：深色对比度优化 */
-.gsc-comment-box-main {
-  background-color: #1a1a2e !important;
-  border-radius: 20px !important;
-}
-
-.gsc-comment-box-textarea {
-  background-color: #121221 !important;
-  border-radius: 12px !important;
-}
-
-/* 3. 修复 Aa 图标尺寸：强制同步 */
+/* 2. 深度对齐 Aa 与工具栏（解决尺寸不一） */
 .gsc-comment-box-buttons button, 
 .gsc-comment-box-back-to-markdown {
-  height: 28px !important;
-  width: 28px !important;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 0 !important; /* 强制对齐 */
   padding: 0 !important;
-  display: inline-flex !important;
+  display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  background: transparent !important;
 }
 
-.gsc-comment-box-buttons svg {
-  width: 16px !important;
-  height: 16px !important;
+/* 3. 严格同步 Tab 位置（解决偏移） */
+.gsc-comment-box-tabs {
+  margin-bottom: 8px !important;
+  border: none !important;
 }
 
-/* 4. Tab 切换：暗色胶囊 */
 .gsc-comment-box-tabs button {
   background: #2a2447 !important;
   color: #b8a6d8 !important;
   border-radius: 999px !important;
+  padding: 6px 16px !important;
+  font-size: 13px !important;
+  margin-right: 8px !important;
 }
 
 .gsc-comment-box-tabs button[aria-selected="true"] {
@@ -48,16 +42,25 @@
   color: #1a1a2e !important;
 }
 
-/* 5. 底部按钮：暗色组件化 */
+/* 4. 输入框深度组件化 */
+.gsc-comment-box-main {
+  background-color: #1a1a2e !important;
+  border-radius: 20px !important;
+}
+
+/* 5. 底部按钮组件化同步（修复不生效问题） */
 .gsc-comment-box-bottom button[data-action="sign-out"] {
   background: #241f3d !important;
   border: 1px solid #332b55 !important;
   color: #b8a6d8 !important;
   border-radius: 999px !important;
+  padding: 4px 14px !important;
+  font-size: 12px !important;
 }
 
 .gsc-comment-box-submit {
   background-color: #88f3ff !important;
   color: #1a1a2e !important;
   border-radius: 999px !important;
+  padding: 6px 20px !important;
 }
