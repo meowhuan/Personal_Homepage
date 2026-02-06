@@ -1,17 +1,13 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const time = ref("");
 const date = ref("");
 const calendar = ref({ day: "", month: "", weekday: "" });
 let timer = 0;
 const isNight = ref(false);
-const isMounted = ref(false);
-const guestInput = ref("");
-const guestList = ref([]);
 const feedCount = ref(0);
 const hearts = ref([]);
-const apiBase = "";
 let heartId = 0;
 const quoteText = ref("加载中…");
 const quoteFrom = ref("");
@@ -44,13 +40,11 @@ onMounted(() => {
   updateClock();
   timer = window.setInterval(updateClock, 1000);
   fetchQuote();
-  isMounted.value = true;
   const savedTheme = localStorage.getItem("meow-theme");
   if (savedTheme) isNight.value = savedTheme === "night";
-  const savedGuest = localStorage.getItem("meow-guestbook");
-  if (savedGuest) guestList.value = JSON.parse(savedGuest);
   const savedFeed = localStorage.getItem("meow-feed-count");
   if (savedFeed) feedCount.value = Number(savedFeed);
+  loadGiscus();
 });
 
 onBeforeUnmount(() => {
@@ -85,50 +79,8 @@ const toggleTheme = () => {
   localStorage.setItem("meow-theme", isNight.value ? "night" : "day");
 };
 
-const persistGuestbook = () => {
-  localStorage.setItem("meow-guestbook", JSON.stringify(guestList.value.slice(0, 30)));
-};
-
 const persistFeed = () => {
   localStorage.setItem("meow-feed-count", String(feedCount.value));
-};
-
-const submitGuest = async () => {
-  const text = guestInput.value.trim();
-  if (!text) return;
-  const item = {
-    id: Date.now(),
-    text,
-    time: new Date().toLocaleString("zh-CN", { hour12: false })
-  };
-  guestList.value = [item, ...guestList.value].slice(0, 30);
-  guestInput.value = "";
-  persistGuestbook();
-  if (apiBase) {
-    try {
-      await fetch(`${apiBase}/guestbook`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(item)
-      });
-    } catch {
-      // ignore; local already saved
-    }
-  }
-};
-
-const loadGuestbook = async () => {
-  if (!apiBase) return;
-  try {
-    const res = await fetch(`${apiBase}/guestbook`);
-    const data = await res.json();
-    if (Array.isArray(data)) {
-      guestList.value = data.slice(0, 30);
-      persistGuestbook();
-    }
-  } catch {
-    // keep local
-  }
 };
 
 const feedCat = () => {
@@ -141,7 +93,52 @@ const feedCat = () => {
   }, 1400);
 };
 
-onMounted(loadGuestbook);
+const loadGiscus = () => {
+  const container = document.getElementById("giscus");
+  if (!container || container.hasChildNodes()) return;
+  const script = document.createElement("script");
+  script.src = "https://giscus.app/client.js";
+  script.async = true;
+  script.crossOrigin = "anonymous";
+  script.setAttribute("data-repo", "meowhuan/Personal_Homepage");
+  script.setAttribute("data-repo-id", "R_kgDORKC6Nw");
+  script.setAttribute("data-category", "Announcements");
+  script.setAttribute("data-category-id", "DIC_kwDORKC6N84C19nh");
+  script.setAttribute("data-mapping", "pathname");
+  script.setAttribute("data-strict", "0");
+  script.setAttribute("data-reactions-enabled", "0");
+  script.setAttribute("data-emit-metadata", "0");
+  script.setAttribute("data-input-position", "top");
+  script.setAttribute(
+    "data-theme",
+    isNight.value
+      ? `${location.origin}/giscus-dark.css`
+      : `${location.origin}/giscus.css`
+  );
+  script.setAttribute("data-lang", "zh-CN");
+  container.appendChild(script);
+};
+
+const updateGiscusTheme = () => {
+  const iframe = document.querySelector("iframe.giscus-frame");
+  if (!iframe) return;
+  iframe.contentWindow?.postMessage(
+    {
+      giscus: {
+        setConfig: {
+          theme: isNight.value
+            ? `${location.origin}/giscus-dark.css`
+            : `${location.origin}/giscus.css`
+        }
+      }
+    },
+    "https://giscus.app"
+  );
+};
+
+watch(isNight, () => {
+  updateGiscusTheme();
+});
 </script>
 
 <template>
@@ -394,8 +391,8 @@ onMounted(loadGuestbook);
             </div>
           </div>
           <div
-            class="relative mt-4 overflow-hidden rounded-3xl border p-4"
-            :class="isNight ? 'border-meow-night-line bg-meow-night-card/80' : 'border-meow-line bg-white/70'"
+            class="relative mt-4 overflow-hidden rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)]"
+            :class="isNight ? 'bg-meow-night-card/80' : 'bg-white/70'"
           >
             <div class="pointer-events-none absolute inset-0">
               <span
@@ -406,40 +403,7 @@ onMounted(loadGuestbook);
                 💗
               </span>
             </div>
-            <div class="flex flex-wrap gap-3">
-              <input
-                v-model="guestInput"
-                maxlength="80"
-                class="w-full rounded-2xl border px-4 py-2 text-sm outline-none"
-                :class="isNight
-                  ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink placeholder:text-meow-night-soft'
-                  : 'border-meow-line bg-white/80 text-meow-ink placeholder:text-meow-soft'"
-                placeholder="写一句话给小猫…"
-              />
-              <button
-                class="meow-btn-ghost px-4 py-2 text-xs"
-                :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
-                type="button"
-                @click="submitGuest"
-              >
-                发送
-              </button>
-            </div>
-            <div class="mt-4 grid gap-3 md:grid-cols-2">
-              <article
-                v-for="item in guestList"
-                :key="item.id"
-                class="rounded-2xl border bg-white/70 p-3 text-xs"
-                :class="isNight ? 'border-meow-night-line bg-meow-night-bg/70 text-meow-night-soft' : 'border-meow-line text-meow-soft'"
-              >
-                <div class="text-sm" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">
-                  {{ item.text }}
-                </div>
-                <div class="mt-2 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                  {{ item.time }}
-                </div>
-              </article>
-            </div>
+            <div id="giscus" class="relative z-1"></div>
           </div>
         </section>
 
@@ -455,15 +419,12 @@ onMounted(loadGuestbook);
 @keyframes pageFade {
   0% {
     opacity: 0;
-    transform: scale(0.985);
   }
   60% {
     opacity: 1;
-    transform: scale(1.01);
   }
   100% {
     opacity: 1;
-    transform: scale(1);
   }
 }
 
@@ -472,10 +433,10 @@ onMounted(loadGuestbook);
 }
 
 .cord-switch {
-  position: absolute;
+  position: fixed;
   top: 4px;
-  right: -70px;
-  transform: translateX(8px);
+  right: 280px;
+  transform: none;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -484,7 +445,7 @@ onMounted(loadGuestbook);
   border: 0;
   cursor: pointer;
   padding: 0;
-  z-index: 2;
+  z-index: 20;
 }
 
 .cord-line {

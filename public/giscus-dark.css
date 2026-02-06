@@ -1,0 +1,42 @@
+/* 针对暗色环境，通过色块区分层级而非线条 */
+:root {
+  --color-border-default: transparent !important;
+  --color-border-muted: transparent !important;
+}
+
+/* 1. 移除线条 */
+.gsc-header, .gsc-comments, .gsc-main, .gsc-comment, .gsc-comment-header, .gsc-comment-content, .gsc-comment-box {
+  border: none !important;
+}
+
+/* 2. 评论卡片：使用深紫色色块 */
+.gsc-comment {
+  background-color: #241f3d !important;
+  border-radius: 24px !important;
+  margin-bottom: 16px !important;
+}
+
+/* 3. 输入框：深色对比 */
+.gsc-comment-box-textarea {
+  background-color: #16162a !important;
+  border-radius: 16px !important;
+  border: 2px solid transparent !important;
+}
+
+.gsc-comment-box-textarea:focus-within {
+  border-color: #88f3ff !important; /* 暗色模式下的青色主题 */
+  box-shadow: 0 4px 12px rgba(136, 243, 255, 0.1) !important;
+}
+
+/* 4. Tab 切换 */
+.gsc-comment-box-tabs button {
+  border: none !important;
+  border-radius: 999px !important;
+  background: #2a2447 !important;
+  color: #b8a6d8 !important;
+}
+
+.gsc-comment-box-tabs button[aria-selected="true"] {
+  background-color: #88f3ff !important;
+  color: #1a1a2e !important;
+}
