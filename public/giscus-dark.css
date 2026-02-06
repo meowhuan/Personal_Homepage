@@ -1,41 +1,46 @@
-/* 针对暗色环境，通过色块区分层级而非线条 */
 :root {
   --color-border-default: transparent !important;
   --color-border-muted: transparent !important;
 }
 
-/* 1. 移除线条 */
-.gsc-header, .gsc-comments, .gsc-main, .gsc-comment, .gsc-comment-header, .gsc-comment-content, .gsc-comment-box {
+/* 1. 去线与背景重置 */
+.gsc-main, .gsc-comment, .gsc-comment-box-main, .gsc-comment-box-tabs {
   border: none !important;
+  box-shadow: none !important;
 }
 
-/* 2. 评论卡片：使用深紫色色块 */
-.gsc-comment {
-  background-color: #241f3d !important;
-  border-radius: 24px !important;
-  margin-bottom: 16px !important;
+/* 2. 输入区：深色对比度优化 */
+.gsc-comment-box-main {
+  background-color: #1a1a2e !important;
+  border-radius: 20px !important;
 }
 
-/* 3. 输入框：深色对比 */
 .gsc-comment-box-textarea {
-  background-color: #16162a !important;
-  border-radius: 16px !important;
-  border: 2px solid transparent !important;
+  background-color: #121221 !important;
+  border-radius: 12px !important;
 }
 
-.gsc-comment-box-textarea:focus-within {
-  border-color: #88f3ff !important; /* 暗色模式下的青色主题 */
-  box-shadow: 0 4px 12px rgba(136, 243, 255, 0.1) !important;
+/* 3. 修复 Aa 图标尺寸：强制同步 */
+.gsc-comment-box-buttons button, 
+.gsc-comment-box-back-to-markdown {
+  height: 28px !important;
+  width: 28px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
 
-/* 4. Tab 切换 */
+.gsc-comment-box-buttons svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* 4. Tab 切换：暗色胶囊 */
 .gsc-comment-box-tabs button {
-  border: none !important;
-  border-radius: 999px !important;
   background: #2a2447 !important;
   color: #b8a6d8 !important;
-  padding: 6px 16px !important;
-  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+  border-radius: 999px !important;
 }
 
 .gsc-comment-box-tabs button[aria-selected="true"] {
@@ -43,39 +48,16 @@
   color: #1a1a2e !important;
 }
 
+/* 5. 底部按钮：暗色组件化 */
+.gsc-comment-box-bottom button[data-action="sign-out"] {
+  background: #241f3d !important;
+  border: 1px solid #332b55 !important;
+  color: #b8a6d8 !important;
+  border-radius: 999px !important;
+}
+
 .gsc-comment-box-submit {
-  padding: 8px 24px !important;
-  font-weight: bold !important;
   background-color: #88f3ff !important;
   color: #1a1a2e !important;
-  border: 1px solid #88f3ff !important;
   border-radius: 999px !important;
-  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
-}
-
-.gsc-comment-box-submit:hover {
-  background-color: #74e6ff !important;
-  border-color: #74e6ff !important;
-}
-
-.gsc-comment-box-submit:active {
-  transform: translateY(1px);
-}
-
-/* 退出登录按钮 */
-.gsc-comment-box-bottom .btn-plain,
-.gsc-comment-box-bottom button[data-action="sign-out"] {
-  border-radius: 999px !important;
-  border: 1px solid #332b55 !important;
-  background: #241f3d !important;
-  color: #b8a6d8 !important;
-  padding: 6px 14px !important;
-  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
-}
-
-.gsc-comment-box-bottom .btn-plain:hover,
-.gsc-comment-box-bottom button[data-action="sign-out"]:hover {
-  background: #2b2450 !important;
-  border-color: #3b2f64 !important;
-  color: #f3e9ff !important;
 }

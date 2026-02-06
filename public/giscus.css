@@ -3,95 +3,85 @@
   --color-border-muted: transparent !important;
 }
 
-/* 1. 彻底移除所有分割线 */
-.gsc-header, 
-.gsc-comments, 
-.gsc-main, 
-.gsc-comment,
-.gsc-comment-header,
-.gsc-comment-content,
-.gsc-comment-box {
+/* 1. 核心容器去线化：彻底抹平所有黑框 */
+.gsc-main, .gsc-header, .gsc-comments, .gsc-footer,
+.gsc-comment, .gsc-comment-header, .gsc-comment-content,
+.gsc-comment-box, .gsc-comment-box-main, .gsc-comment-box-tabs {
   border: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
 }
 
-/* 2. 评论卡片：改为浅色色块，增加大圆角 */
-.gsc-comment {
-  background-color: #fff8fb !important; /* 呼应主页淡粉色 */
-  border-radius: 24px !important; /* 匹配主页大圆角 */
-  margin-bottom: 16px !important;
-  padding: 8px 16px !important;
-}
-
-/* 3. 输入框：模拟主页的输入区感官 */
-.gsc-comment-box-textarea {
+/* 2. 输入区域组件化：模拟主页卡片感 */
+.gsc-comment-box-main {
   background-color: #fdf6f9 !important;
+  border-radius: 20px !important;
+  padding: 8px !important;
+}
+
+.gsc-comment-box-textarea {
+  background-color: #ffffff !important;
   border: 2px solid transparent !important;
-  border-radius: 16px !important;
-  transition: all 0.3s ease;
+  border-radius: 12px !important;
+  margin-top: 4px !important;
 }
 
 .gsc-comment-box-textarea:focus-within {
-  background-color: #ffffff !important;
-  border-color: #ff7ab6 !important; /* 聚焦时显示粉色 */
+  border-color: #ff7ab6 !important;
   box-shadow: 0 4px 12px rgba(255, 122, 182, 0.1) !important;
 }
 
-/* 4. Tab 切换：改为胶囊状，去除文件夹感 */
-.gsc-comment-box-tabs {
-  border-bottom: none !important;
-  margin-bottom: 12px !important;
+/* 3. 修复工具栏：统一 Aa 图标与功能按钮尺寸 */
+.gsc-comment-box-buttons {
+  padding: 4px 8px !important;
 }
 
+.gsc-comment-box-buttons button, 
+.gsc-comment-box-back-to-markdown {
+  border-radius: 8px !important;
+  padding: 4px !important;
+  height: 28px !important;
+  width: 28px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #7e6a86 !important;
+}
+
+/* 4. Tab 切换：胶囊化按钮 */
 .gsc-comment-box-tabs button {
   border: none !important;
-  border-radius: 999px !important; /* 彻底胶囊化 */
+  border-radius: 999px !important;
   padding: 6px 16px !important;
-  font-weight: 500 !important;
   background: #f4ecf6 !important;
   color: #7e6a86 !important;
   margin-right: 8px !important;
-  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+  font-size: 13px !important;
 }
 
 .gsc-comment-box-tabs button[aria-selected="true"] {
-  background-color: #2b1d2a !important; /* 匹配右侧深色按钮 */
-  color: #ffffff !important;
-}
-
-/* 5. 提交按钮：保持胶囊感 */
-.gsc-comment-box-submit {
-  padding: 8px 24px !important;
-  font-weight: bold !important;
   background-color: #2b1d2a !important;
   color: #ffffff !important;
-  border: 1px solid #2b1d2a !important;
+}
+
+/* 5. 底部操作栏：退出登录 & 评论按钮 */
+.gsc-comment-box-footer {
+  margin-top: 8px !important;
+}
+
+.gsc-comment-box-bottom button[data-action="sign-out"],
+.btn-plain {
   border-radius: 999px !important;
-  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
-}
-
-.gsc-comment-box-submit:hover {
-  background-color: #1f1a17 !important;
-  border-color: #1f1a17 !important;
-}
-
-.gsc-comment-box-submit:active {
-  transform: translateY(1px);
-}
-
-/* 退出登录按钮 */
-.gsc-comment-box-bottom .btn-plain,
-.gsc-comment-box-bottom button[data-action="sign-out"] {
-  border-radius: 999px !important;
-  border: 1px solid #e9d9ea !important;
   background: #fff1f7 !important;
-  color: #6b5f57 !important;
-  padding: 6px 14px !important;
-  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+  border: 1px solid #e9d9ea !important;
+  padding: 4px 14px !important;
+  font-size: 12px !important;
 }
 
-.gsc-comment-box-bottom .btn-plain:hover,
-.gsc-comment-box-bottom button[data-action="sign-out"]:hover {
-  background: #ffe2f0 !important;
-  border-color: #ff7ab6 !important;
-  color: #2b1d2a !important;
+.gsc-comment-box-submit {
+  border-radius: 999px !important;
+  padding: 6px 20px !important;
+  background-color: #2b1d2a !important;
+  color: #ffffff !important;
+  border: none !important;
 }
