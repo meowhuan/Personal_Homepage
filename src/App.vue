@@ -112,8 +112,8 @@ const loadGiscus = () => {
   script.setAttribute(
     "data-theme",
     isNight.value
-      ? `${location.origin}/giscus-dark.css`
-      : `${location.origin}/giscus.css`
+      ? "https://cdn.jsdelivr.net/gh/meowhuan/Personal_Homepage@main/public/giscus-dark.css"
+      : "https://cdn.jsdelivr.net/gh/meowhuan/Personal_Homepage@main/public/giscus.css"
   );
   script.setAttribute("data-lang", "zh-CN");
   container.appendChild(script);
@@ -127,8 +127,8 @@ const updateGiscusTheme = () => {
       giscus: {
         setConfig: {
           theme: isNight.value
-            ? `${location.origin}/giscus-dark.css`
-            : `${location.origin}/giscus.css`
+          ? "https://cdn.jsdelivr.net/gh/meowhuan/Personal_Homepage@main/public/giscus-dark.css"
+          : "https://cdn.jsdelivr.net/gh/meowhuan/Personal_Homepage@main/public/giscus.css"
         }
       }
     },
@@ -143,7 +143,7 @@ watch(isNight, () => {
 
 <template>
   <div
-    class="min-h-screen font-body page-fade transition-colors duration-500"
+    class="min-h-screen font-body page-fade transition-colors duration-700 ease-in-out"
     :class="isNight
       ? 'bg-gradient-to-br from-meow-night-bg via-[#201a3f] to-[#16162a] text-meow-night-ink'
       : 'bg-gradient-to-br from-meow-bg via-[#fff6fb] to-[#f2f0ff] text-meow-ink'"
@@ -391,7 +391,7 @@ watch(isNight, () => {
             </div>
           </div>
           <div
-            class="relative mt-4 overflow-hidden rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)]"
+            class="relative mt-4 overflow-hidden rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)] transition-colors duration-700 ease-in-out"
             :class="isNight ? 'bg-meow-night-card/80' : 'bg-white/70'"
           >
             <div class="pointer-events-none absolute inset-0">

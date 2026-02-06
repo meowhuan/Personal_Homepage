@@ -34,9 +34,48 @@
   border-radius: 999px !important;
   background: #2a2447 !important;
   color: #b8a6d8 !important;
+  padding: 6px 16px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
 }
 
 .gsc-comment-box-tabs button[aria-selected="true"] {
   background-color: #88f3ff !important;
   color: #1a1a2e !important;
+}
+
+.gsc-comment-box-submit {
+  padding: 8px 24px !important;
+  font-weight: bold !important;
+  background-color: #88f3ff !important;
+  color: #1a1a2e !important;
+  border: 1px solid #88f3ff !important;
+  border-radius: 999px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+}
+
+.gsc-comment-box-submit:hover {
+  background-color: #74e6ff !important;
+  border-color: #74e6ff !important;
+}
+
+.gsc-comment-box-submit:active {
+  transform: translateY(1px);
+}
+
+/* 退出登录按钮 */
+.gsc-comment-box-bottom .btn-plain,
+.gsc-comment-box-bottom button[data-action="sign-out"] {
+  border-radius: 999px !important;
+  border: 1px solid #332b55 !important;
+  background: #241f3d !important;
+  color: #b8a6d8 !important;
+  padding: 6px 14px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+}
+
+.gsc-comment-box-bottom .btn-plain:hover,
+.gsc-comment-box-bottom button[data-action="sign-out"]:hover {
+  background: #2b2450 !important;
+  border-color: #3b2f64 !important;
+  color: #f3e9ff !important;
 }

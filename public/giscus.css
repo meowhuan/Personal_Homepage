@@ -50,6 +50,7 @@
   background: #f4ecf6 !important;
   color: #7e6a86 !important;
   margin-right: 8px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
 }
 
 .gsc-comment-box-tabs button[aria-selected="true"] {
@@ -62,4 +63,35 @@
   padding: 8px 24px !important;
   font-weight: bold !important;
   background-color: #2b1d2a !important;
+  color: #ffffff !important;
+  border: 1px solid #2b1d2a !important;
+  border-radius: 999px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+}
+
+.gsc-comment-box-submit:hover {
+  background-color: #1f1a17 !important;
+  border-color: #1f1a17 !important;
+}
+
+.gsc-comment-box-submit:active {
+  transform: translateY(1px);
+}
+
+/* 退出登录按钮 */
+.gsc-comment-box-bottom .btn-plain,
+.gsc-comment-box-bottom button[data-action="sign-out"] {
+  border-radius: 999px !important;
+  border: 1px solid #e9d9ea !important;
+  background: #fff1f7 !important;
+  color: #6b5f57 !important;
+  padding: 6px 14px !important;
+  transition: background-color 0.4s ease, color 0.4s ease, border-color 0.4s ease !important;
+}
+
+.gsc-comment-box-bottom .btn-plain:hover,
+.gsc-comment-box-bottom button[data-action="sign-out"]:hover {
+  background: #ffe2f0 !important;
+  border-color: #ff7ab6 !important;
+  color: #2b1d2a !important;
 }
