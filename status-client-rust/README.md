@@ -1,24 +1,25 @@
 # Status Client (Rust)
 
 Rust 客户端（Windows/Linux 心跳上报）。
+Rust client for Windows/Linux heartbeat reporting.
 
-## 配置文件 / Config file
+## 配置文件 / Config File
 
 将 `status-client.toml` 放在可执行文件同目录（双击运行会优先读取 EXE 同目录）：
+
+Place `status-client.toml` next to the executable (double-click prefers the EXE directory):
 
 ```toml
 endpoint = "http://your-host:7999/heartbeat"
 token = "your_token"
 device_id = "pc-main"
-device_name = "PC 主机"
+device_name = "PC Main"
 idle_timeout_secs = 300
 heartbeat_interval_secs = 60
 log_file = "status-client.log"
 ```
 
-托盘功能已移除，无需图标文件。
-
-## 环境变量（覆盖配置） / Env (override config)
+## 环境变量（覆盖配置） / Env (Override Config)
 
 - `STATUS_ENDPOINT`
 - `STATUS_TOKEN`
@@ -48,7 +49,11 @@ cargo deb
 
 ## 说明 / Notes
 
-该客户端为后台静默运行（无 UI、无托盘）。可配置为开机自启或作为服务运行。
+- 该客户端为后台静默运行（无 UI、无托盘）。
+- 可配置为开机自启或作为服务运行。
+
+This client runs silently in the background (no UI, no tray).
+You can set it to auto-start or run as a service.
 
 ## 开机自启 / Auto-start
 
