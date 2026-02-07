@@ -1,0 +1,23 @@
+#!/system/bin/sh
+# Installer script placeholder (use Magisk template)
+SKIPMOUNT=false
+PROPFILE=false
+POSTFSDATA=false
+LATESTARTSERVICE=true
+
+print_modname() {
+  ui_print "***********************"
+  ui_print " Meowra Status AutoX "
+  ui_print "***********************"
+}
+
+on_install() {
+  ui_print "Installing module..."
+  mkdir -p /data/adb/meowra-status
+  cp $MODPATH/../config.env /data/adb/meowra-status/config.env
+  chmod 600 /data/adb/meowra-status/config.env
+}
+
+set_permissions() {
+  set_perm_recursive $MODPATH 0 0 0755 0644
+}

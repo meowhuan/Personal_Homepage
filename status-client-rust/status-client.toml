@@ -1,0 +1,7 @@
+endpoint = "http://your-host:7999/heartbeat"
+token = "your_token"
+device_id = "pc-main"
+device_name = "PC 主机"
+idle_timeout_secs = 300
+heartbeat_interval_secs = 60
+log_file = "status-client.log"

@@ -1,0 +1,10 @@
+############################################
+# Magisk Module
+############################################
+
+id=meowra-status
+name=Meowra Status AutoX
+version=1.0.0
+versionCode=1
+author=Meowhuan
+description=AutoX.js heartbeat service

@@ -12,6 +12,13 @@ const quoteError = ref(false);
 const quoteLoading = ref(false);
 const nextQuoteAt = ref(0);
 const cooldownMs = 1500;
+const statusList = ref([]);
+const statusError = ref(false);
+const statusUrl = "https://m.ratf.cn/status";
+const statusLoading = ref(false);
+const statusUpdatedAt = ref(0);
+const statusNextAt = ref(0);
+const statusCooldownMs = 5000;
 
 const updateClock = () => {
   const now = new Date();
@@ -37,6 +44,8 @@ onMounted(() => {
   updateClock();
   timer = window.setInterval(updateClock, 1000);
   fetchQuote();
+  fetchStatus();
+  setInterval(fetchStatus, 60000);
   const savedTheme = localStorage.getItem("meow-theme");
   if (savedTheme) {
     isNight.value = savedTheme === "night";
@@ -71,6 +80,28 @@ const fetchQuote = () => {
     .finally(() => {
       quoteLoading.value = false;
     });
+};
+
+const canFetchStatus = () => Date.now() >= statusNextAt.value;
+
+const fetchStatus = async () => {
+  if (!canFetchStatus()) return;
+  statusNextAt.value = Date.now() + statusCooldownMs;
+  statusLoading.value = true;
+  try {
+    const res = await fetch(statusUrl);
+    if (!res.ok) throw new Error("status fetch failed");
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      statusList.value = data;
+      statusError.value = false;
+      statusUpdatedAt.value = Date.now();
+    }
+  } catch {
+    statusError.value = true;
+  } finally {
+    statusLoading.value = false;
+  }
 };
 
 const toggleTheme = () => {
@@ -287,6 +318,45 @@ watch(isNight, () => {
               <span class="meow-pill">#日常记录</span>
               <span class="meow-pill">#开源项目</span>
               <span class="meow-pill">#情绪垃圾桶</span>
+            </div>
+
+            <div class="mt-4 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+              <div class="flex items-center justify-between gap-2">
+                <div class="text-[11px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                  在线状态
+                </div>
+                <button
+                  class="meow-pill px-2 py-0.5 text-[11px]"
+                  type="button"
+                  :class="[
+                    (!canFetchStatus() || statusLoading) ? 'opacity-50' : '',
+                    isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''
+                  ]"
+                  :disabled="statusLoading || !canFetchStatus()"
+                  @click="fetchStatus()"
+                >
+                  {{ statusLoading ? "刷新中" : (canFetchStatus() ? "刷新" : "冷却中") }}
+                </button>
+              </div>
+              <div class="mt-1 text-[11px]" v-if="statusUpdatedAt">
+                更新于 {{ new Date(statusUpdatedAt).toLocaleTimeString("zh-CN") }}
+              </div>
+              <div v-if="statusError" class="mt-2">暂时无法获取</div>
+              <div v-else class="mt-2 space-y-1">
+                <div
+                  v-for="item in statusList"
+                  :key="item.device_id"
+                  class="flex items-center justify-between gap-2"
+                >
+                  <span class="truncate">{{ item.device_name }}</span>
+                  <span
+                    class="text-[11px]"
+                    :class="item.online ? (isNight ? 'text-meow-night-accent' : 'text-meow-accent') : (isNight ? 'text-meow-night-soft' : 'text-meow-soft')"
+                  >
+                    {{ item.online ? "在线" : "离线" }}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </section>

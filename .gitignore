@@ -3,5 +3,8 @@ dist
 build
 .DS_Store
 *.log
-.env
 .vscode/
+.env
+.idea/
+*.iml
+.gradle/
