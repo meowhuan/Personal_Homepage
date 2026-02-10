@@ -189,7 +189,7 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn schedule_list(State(state): State<AppState>) -> impl IntoResponse {
-    let conn = state.db.lock().unwrap();
+    let mut conn = state.db.lock().unwrap();
     let mut stmt = conn
         .prepare(
             "SELECT id, title, time, note, location, tag, sort_order, updated_at
