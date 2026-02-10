@@ -778,6 +778,7 @@ watch(isNight, () => {
 .meow-window-title {
   flex: 1;
   font-weight: 600;
+  margin-left: 26px;
 }
 
 .meow-window-body {
