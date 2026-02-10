@@ -1,7 +1,7 @@
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -38,6 +38,34 @@ struct DeviceStatus {
     idle_seconds: Option<u64>,
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+struct ScheduleItem {
+    id: String,
+    title: String,
+    time: String,
+    note: Option<String>,
+    location: Option<String>,
+    tag: Option<String>,
+    sort_order: i64,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct SchedulePayload {
+    items: Vec<ScheduleItemInput>,
+}
+
+#[derive(Deserialize)]
+struct ScheduleItemInput {
+    id: Option<String>,
+    title: String,
+    time: String,
+    note: Option<String>,
+    location: Option<String>,
+    tag: Option<String>,
+    sort_order: Option<i64>,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -56,6 +84,16 @@ async fn main() {
             online INTEGER NOT NULL,
             last_seen INTEGER NOT NULL,
             idle_seconds INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS schedule_items (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            time TEXT NOT NULL,
+            note TEXT,
+            location TEXT,
+            tag TEXT,
+            sort_order INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
         );",
     )
     .expect("init db");
@@ -75,6 +113,8 @@ async fn main() {
         .route("/heartbeat", post(heartbeat))
         .route("/device", get(delete_device))
         .route("/status", get(status))
+        .route("/schedule", get(schedule_list).post(schedule_update))
+        .route("/schedule/admin", get(schedule_admin_page))
         .with_state(state)
         .layer(cors);
 
@@ -146,6 +186,257 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
     let list: Vec<DeviceStatus> = rows.filter_map(Result::ok).collect();
 
     Json(list)
+}
+
+async fn schedule_list(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, time, note, location, tag, sort_order, updated_at
+             FROM schedule_items
+             ORDER BY sort_order ASC, updated_at DESC",
+        )
+        .unwrap();
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ScheduleItem {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                time: row.get(2)?,
+                note: row.get(3)?,
+                location: row.get(4)?,
+                tag: row.get(5)?,
+                sort_order: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .unwrap();
+
+    let list: Vec<ScheduleItem> = rows.filter_map(Result::ok).collect();
+    Json(list)
+}
+
+async fn schedule_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SchedulePayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let now = now_ts();
+    let conn = state.db.lock().unwrap();
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    if tx.execute("DELETE FROM schedule_items", []).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    for (idx, item) in payload.items.into_iter().enumerate() {
+        let id = item
+            .id
+            .unwrap_or_else(|| format!("schedule-{}-{}", now, idx));
+        let sort_order = item.sort_order.unwrap_or(idx as i64);
+        if tx
+            .execute(
+                "INSERT INTO schedule_items (id, title, time, note, location, tag, sort_order, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    id,
+                    item.title,
+                    item.time,
+                    item.note,
+                    item.location,
+                    item.tag,
+                    sort_order,
+                    now
+                ],
+            )
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+
+    if tx.commit().is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    StatusCode::OK
+}
+
+async fn schedule_admin_page() -> impl IntoResponse {
+    Html(
+        r#"<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 行程表管理</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Kalam", "Segoe UI", sans-serif;
+        background: linear-gradient(140deg, #fff1f7, #f5f4ff);
+        color: #2b1d2a;
+      }
+      .wrap {
+        max-width: 900px;
+        margin: 24px auto;
+        padding: 24px;
+      }
+      .window {
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.75);
+        box-shadow: 0 16px 36px rgba(47, 20, 47, 0.12);
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        overflow: hidden;
+      }
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: linear-gradient(90deg, rgba(255, 219, 235, 0.9), rgba(209, 244, 255, 0.9));
+        font-size: 14px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #f0b1c9;
+        box-shadow: 16px 0 0 #f6d48f, 32px 0 0 #b9efdf;
+      }
+      .content {
+        padding: 18px;
+      }
+      textarea, input {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        padding: 10px 12px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.8);
+      }
+      textarea {
+        min-height: 260px;
+        font-family: "JetBrains Mono", "Consolas", monospace;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .row > div {
+        flex: 1;
+      }
+      button {
+        border: 0;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: #2b1d2a;
+        color: #fff;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .hint {
+        font-size: 12px;
+        color: #7b6b7a;
+        margin-top: 8px;
+      }
+      .status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #7b6b7a;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar">
+          <span class="dot"></span>
+          Meow Schedule Admin
+        </div>
+        <div class="content">
+          <div class="row">
+            <div>
+              <label>Token</label>
+              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
+            </div>
+            <div>
+              <label>接口地址</label>
+              <input id="api" type="text" value="/schedule" />
+            </div>
+          </div>
+          <label>行程表 JSON</label>
+          <textarea id="payload"></textarea>
+          <div class="row">
+            <button id="load">加载</button>
+            <button id="save">保存</button>
+          </div>
+          <div class="hint">格式：{ "items": [ { "title": "...", "time": "...", "note": "...", "location": "...", "tag": "...", "sort_order": 0 } ] }</div>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const statusEl = document.getElementById("status");
+      const payloadEl = document.getElementById("payload");
+      const tokenEl = document.getElementById("token");
+      const apiEl = document.getElementById("api");
+
+      const setStatus = (text) => { statusEl.textContent = text; };
+
+      const loadSchedule = async () => {
+        try {
+          setStatus("加载中...");
+          const res = await fetch(apiEl.value);
+          const items = await res.json();
+          payloadEl.value = JSON.stringify({ items }, null, 2);
+          setStatus("已加载");
+        } catch (err) {
+          setStatus("加载失败");
+        }
+      };
+
+      const saveSchedule = async () => {
+        try {
+          const payload = JSON.parse(payloadEl.value);
+          setStatus("保存中...");
+          const res = await fetch(apiEl.value, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-token": tokenEl.value
+            },
+            body: JSON.stringify(payload)
+          });
+          setStatus(res.ok ? "保存成功" : "保存失败");
+        } catch (err) {
+          setStatus("保存失败");
+        }
+      };
+
+      document.getElementById("load").addEventListener("click", loadSchedule);
+      document.getElementById("save").addEventListener("click", saveSchedule);
+      loadSchedule();
+    </script>
+  </body>
+</html>"#,
+    )
 }
 
 #[derive(Deserialize)]

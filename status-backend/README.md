@@ -32,6 +32,9 @@ STATUS_TOKEN=your_token
 - `POST /heartbeat`
 - `GET /status`
 - `GET /device?id=DEVICE_ID&token=TOKEN`
+- `GET /schedule`
+- `POST /schedule` (需要 token 鉴权)
+- `GET /schedule/admin` (简易管理页面)
 
-说明：删除接口为 `GET`，需要 `id` 与 `token`。
+说明：删除接口为 `GET`，需要 `id` 与 `token`。`/schedule` 的更新接口需在请求头中携带 `x-token` 或 `authorization: Bearer TOKEN`。
 Note: delete API is `GET` and requires `id` and `token`.

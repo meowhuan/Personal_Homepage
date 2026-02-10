@@ -19,6 +19,11 @@ const statusLoading = ref(false);
 const statusUpdatedAt = ref(0);
 const statusNextAt = ref(0);
 const statusCooldownMs = 5000;
+const scheduleList = ref([]);
+const scheduleError = ref(false);
+const scheduleUrl = "https://m.ratf.cn/schedule";
+const scheduleLoading = ref(false);
+const scheduleUpdatedAt = ref(0);
 const hasOnlineDevice = computed(() =>
   statusList.value.some((item) => item?.online)
 );
@@ -28,7 +33,7 @@ const allDevicesOffline = computed(
 const statusSummaryText = computed(() => {
   if (statusLoading.value && statusList.value.length === 0) return "加载中";
   if (hasOnlineDevice.value) return "营业中";
-  if (allDevicesOffline.value) return "在忙、睡觉";
+  if (allDevicesOffline.value) return "在忙/睡觉";
   return "暂时无法获取";
 });
 const statusSummaryClass = computed(() => {
@@ -63,7 +68,9 @@ onMounted(() => {
   timer = window.setInterval(updateClock, 1000);
   fetchQuote();
   fetchStatus();
+  fetchSchedule();
   setInterval(fetchStatus, 60000);
+  setInterval(fetchSchedule, 120000);
   const savedTheme = localStorage.getItem("meow-theme");
   if (savedTheme) {
     isNight.value = savedTheme === "night";
@@ -119,6 +126,24 @@ const fetchStatus = async () => {
     statusError.value = true;
   } finally {
     statusLoading.value = false;
+  }
+};
+
+const fetchSchedule = async () => {
+  scheduleLoading.value = true;
+  try {
+    const res = await fetch(scheduleUrl);
+    if (!res.ok) throw new Error("schedule fetch failed");
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      scheduleList.value = data;
+      scheduleError.value = false;
+      scheduleUpdatedAt.value = Date.now();
+    }
+  } catch {
+    scheduleError.value = true;
+  } finally {
+    scheduleLoading.value = false;
   }
 };
 
@@ -221,6 +246,7 @@ watch(isNight, () => {
           </div>
           <div class="hidden items-center gap-5 text-sm md:flex" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#about">关于我</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#schedule">行程表</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
           </div>
@@ -322,14 +348,63 @@ watch(isNight, () => {
                 X
               </a>
             </div>
+
+            <div id="schedule" class="pt-2">
+              <div
+                class="meow-window meow-card motion-card mt-6 rounded-3xl px-5 py-4 text-xs backdrop-blur"
+                :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
+              >
+                <div class="meow-window-bar">
+                  <span class="meow-window-dots"></span>
+                  <span class="meow-window-title">Meow Schedule</span>
+                  <button
+                    class="meow-pill motion-press px-2 py-0.5 text-[11px]"
+                    type="button"
+                    :class="[
+                      scheduleLoading ? 'opacity-50' : '',
+                      isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''
+                    ]"
+                    :disabled="scheduleLoading"
+                    @click="fetchSchedule()"
+                  >
+                    {{ scheduleLoading ? "刷新中" : "刷新" }}
+                  </button>
+                </div>
+                <div class="meow-window-body">
+                  <div class="text-[11px]" v-if="scheduleUpdatedAt">
+                    更新于 {{ new Date(scheduleUpdatedAt).toLocaleTimeString("zh-CN") }}
+                  </div>
+                  <div v-if="scheduleError" class="mt-2 text-sm">暂时无法获取</div>
+                  <div v-else-if="scheduleList.length === 0" class="mt-2 text-sm">暂无行程</div>
+                  <div v-else class="mt-3 space-y-3">
+                    <div
+                      v-for="item in scheduleList"
+                      :key="item.id"
+                      class="meow-window-item"
+                    >
+                      <div class="meow-window-time">{{ item.time }}</div>
+                      <div class="meow-window-content">
+                        <div class="meow-window-titleline">
+                          <span class="meow-window-name">{{ item.title }}</span>
+                          <span v-if="item.tag" class="meow-pill">{{ item.tag }}</span>
+                        </div>
+                        <div v-if="item.location" class="meow-window-meta">地点：{{ item.location }}</div>
+                        <div v-if="item.note" class="meow-window-note">{{ item.note }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div
-            class="meow-card motion-card p-6"
+            class="meow-card motion-card quick-card p-6"
             style="--float-delay: 0.4s"
             :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
           >
             <h2 class="font-display text-2xl">快速了解我</h2>
+            <div class="quick-card-body">
             <div class="mt-4 space-y-2 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
               <p>📌 城市：广东湛江</p>
               <p>🎒 方向：随缘</p>
@@ -367,9 +442,9 @@ watch(isNight, () => {
                 更新于 {{ new Date(statusUpdatedAt).toLocaleTimeString("zh-CN") }}
               </div>
               <div v-if="statusError" class="mt-2">暂时无法获取</div>
-              <div v-else class="mt-2 space-y-1">
+              <div v-else class="mt-2 space-y-1 status-list">
                 <div
-                  v-for="item in statusList"
+                  v-for="item in statusList.slice(0, 3)"
                   :key="item.device_id"
                   class="flex items-center justify-between gap-2"
                 >
@@ -382,6 +457,23 @@ watch(isNight, () => {
                   </span>
                 </div>
               </div>
+              <div
+                class="mt-3 meow-mini-widget meow-mood-widget flex items-start gap-3 rounded-3xl px-5 py-4 text-xs backdrop-blur"
+                :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
+              >
+                <div class="flex-1 leading-tight">
+                  <div class="text-[11px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                    今日心情
+                  </div>
+                  <div class="mt-1 text-sm font-600" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">
+                    慢慢来，也很好
+                  </div>
+                  <div class="mt-1 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                    —— 留给今天的小温柔
+                  </div>
+                </div>
+              </div>
+            </div>
             </div>
           </div>
         </section>
@@ -617,8 +709,6 @@ watch(isNight, () => {
 }
 
 .motion-card {
-  animation: floatSoft 8s ease-in-out infinite;
-  animation-delay: var(--float-delay, 0s);
   transition: transform 0.5s ease, box-shadow 0.5s ease;
 }
 
@@ -660,6 +750,160 @@ watch(isNight, () => {
 
 .nav-link:hover::after {
   transform: scaleX(1);
+}
+
+.meow-window {
+  overflow: hidden;
+}
+
+.meow-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 10px;
+  font-size: 12px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  background: transparent;
+}
+
+.meow-window-dots {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f0b1c9;
+  box-shadow: 16px 0 0 #f6d48f, 32px 0 0 #b9efdf;
+}
+
+.meow-window-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.meow-window-body {
+  padding: 0;
+  font-size: 12px;
+}
+
+.meow-window-item {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(233, 217, 234, 0.9);
+}
+
+.meow-window .meow-window-item {
+  color: inherit;
+}
+
+.meow-window .meow-window-item .text-meow-night-ink,
+.meow-window .meow-window-item .text-meow-ink {
+  font-weight: 600;
+}
+
+.meow-window.text-meow-night-soft .meow-window-item {
+  background: rgba(35, 28, 58, 0.8);
+  border-color: rgba(74, 64, 110, 0.8);
+}
+
+.meow-window.text-meow-night-soft .meow-window-meta {
+  color: rgba(194, 181, 222, 0.75);
+}
+
+.meow-window-time {
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.meow-window-titleline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.meow-window-meta {
+  margin-top: 4px;
+  color: rgba(90, 76, 95, 0.8);
+}
+
+.meow-window-note {
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.status-list {
+  max-height: 96px;
+  overflow: hidden;
+}
+
+.quick-card {
+  display: flex;
+  flex-direction: column;
+  max-height: 520px;
+}
+
+.quick-card-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.meow-mini-widget {
+  border-radius: 14px;
+  border: none;
+  background: transparent;
+}
+
+.meow-mood-widget {
+  margin-top: auto;
+  min-height: 72px;
+  align-self: stretch;
+  text-align: center;
+}
+
+.meow-card .meow-mini-widget {
+  margin-top: 6px;
+}
+
+.meow-card .meow-mini-widget .text-meow-night-ink,
+.meow-card .meow-mini-widget .text-meow-ink {
+  font-weight: 600;
+}
+
+.meow-card .meow-mini-widget {
+  color: inherit;
+}
+
+.meow-card .meow-mini-widget.text-meow-night-soft {
+  border-color: rgba(74, 64, 110, 0.8);
+  background: rgba(35, 28, 58, 0.75);
+}
+
+@media (max-width: 640px) {
+  .quick-card {
+    max-height: none;
+  }
+
+  .quick-card-body {
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .meow-window-item {
+    grid-template-columns: 1fr;
+  }
+
+  .meow-window-titleline {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 @keyframes floatSoft {
