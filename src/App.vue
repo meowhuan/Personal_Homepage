@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const time = ref("");
 const date = ref("");
@@ -19,6 +19,24 @@ const statusLoading = ref(false);
 const statusUpdatedAt = ref(0);
 const statusNextAt = ref(0);
 const statusCooldownMs = 5000;
+const hasOnlineDevice = computed(() =>
+  statusList.value.some((item) => item?.online)
+);
+const allDevicesOffline = computed(
+  () => statusList.value.length > 0 && statusList.value.every((item) => !item?.online)
+);
+const statusSummaryText = computed(() => {
+  if (statusLoading.value && statusList.value.length === 0) return "加载中";
+  if (hasOnlineDevice.value) return "营业中";
+  if (allDevicesOffline.value) return "在忙、睡觉";
+  return "暂时无法获取";
+});
+const statusSummaryClass = computed(() => {
+  if (hasOnlineDevice.value) {
+    return isNight.value ? "text-meow-night-accent" : "text-meow-accent";
+  }
+  return isNight.value ? "text-meow-night-soft" : "text-meow-soft";
+});
 
 const updateClock = () => {
   const now = new Date();
@@ -202,15 +220,16 @@ watch(isNight, () => {
             <div class="font-display text-xl tracking-wide">Meowhuan</div>
           </div>
           <div class="hidden items-center gap-5 text-sm md:flex" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-            <a :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#about">关于我</a>
-            <a :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
-            <a :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#about">关于我</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
           </div>
         </nav>
 
         <div class="mt-6 grid gap-4 md:grid-cols-[1fr_auto] md:items-stretch">
           <div
-            class="meow-card flex h-full min-h-[96px] items-start gap-3 rounded-3xl px-5 py-4 text-xs backdrop-blur"
+            class="meow-card motion-card flex h-full min-h-[96px] items-start gap-3 rounded-3xl px-5 py-4 text-xs backdrop-blur"
+            style="--float-delay: 0.2s"
             :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
           >
             <span class="text-base">💬</span>
@@ -222,7 +241,7 @@ watch(isNight, () => {
               </div>
             </div>
             <button
-              class="meow-pill px-2 py-1 text-[11px] transition-opacity"
+              class="meow-pill motion-press px-2 py-1 text-[11px] transition-opacity"
               type="button"
               :disabled="!canFetchQuote() || quoteLoading"
               :class="[
@@ -236,7 +255,8 @@ watch(isNight, () => {
           </div>
 
           <div
-            class="meow-card flex h-full min-h-[96px] items-center gap-4 rounded-3xl px-5 py-4 text-xs backdrop-blur md:justify-self-end"
+            class="meow-card motion-card flex h-full min-h-[96px] items-center gap-4 rounded-3xl px-5 py-4 text-xs backdrop-blur md:justify-self-end"
+            style="--float-delay: 0.6s"
             :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
           >
             <div
@@ -268,14 +288,14 @@ watch(isNight, () => {
             </p>
             <div class="flex flex-wrap gap-3">
               <a
-                class="meow-btn-primary"
+                class="meow-btn-primary motion-press"
                 :class="isNight ? 'bg-meow-night-accent text-meow-night-bg' : ''"
                 href="mailto:meowhuan@qq.com"
               >
                 Email me
               </a>
               <a
-                class="meow-btn-ghost"
+                class="meow-btn-ghost motion-press"
                 :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
                 href="https://list.meowra.cn"
                 target="_blank"
@@ -284,7 +304,7 @@ watch(isNight, () => {
                 OpenList / 下载站
               </a>
               <a
-                class="meow-btn-ghost"
+                class="meow-btn-ghost motion-press"
                 :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
                 href="https://github.com/meowhuan"
                 target="_blank"
@@ -293,7 +313,7 @@ watch(isNight, () => {
                 GitHub
               </a>
               <a
-                class="meow-btn-ghost"
+                class="meow-btn-ghost motion-press"
                 :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
                 href="https://x.com/meow_huan"
                 target="_blank"
@@ -305,7 +325,8 @@ watch(isNight, () => {
           </div>
 
           <div
-            class="meow-card p-6"
+            class="meow-card motion-card p-6"
+            style="--float-delay: 0.4s"
             :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
           >
             <h2 class="font-display text-2xl">快速了解我</h2>
@@ -326,7 +347,7 @@ watch(isNight, () => {
                   在线状态
                 </div>
                 <button
-                  class="meow-pill px-2 py-0.5 text-[11px]"
+                  class="meow-pill motion-press px-2 py-0.5 text-[11px]"
                   type="button"
                   :class="[
                     (!canFetchStatus() || statusLoading) ? 'opacity-50' : '',
@@ -337,6 +358,10 @@ watch(isNight, () => {
                 >
                   {{ statusLoading ? "刷新中" : (canFetchStatus() ? "刷新" : "冷却中") }}
                 </button>
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-2 text-[11px]">
+                <span :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">设备状态</span>
+                <span :class="statusSummaryClass">{{ statusSummaryText }}</span>
               </div>
               <div class="mt-1 text-[11px]" v-if="statusUpdatedAt">
                 更新于 {{ new Date(statusUpdatedAt).toLocaleTimeString("zh-CN") }}
@@ -364,19 +389,31 @@ watch(isNight, () => {
         <section id="about" class="mt-16">
           <h2 class="font-display text-2xl">关于我</h2>
           <div class="mt-6 grid gap-4 md:grid-cols-3">
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.1s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">我在意的事</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 并没有在意的事 ( •̥́ ˍ •̀ू )，只想过好每一天，和喜欢的人一起做喜欢的事。
               </p>
             </article>
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.35s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">我的兴趣</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 编程、记录、睡觉、奶茶、明日方舟，还有可爱的设计和配色。
               </p>
             </article>
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.6s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">我在寻找</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 貌似并没有什么想寻找的东西，但如果有的话，希望是能让我开心的事物和人吧。
@@ -388,13 +425,17 @@ watch(isNight, () => {
         <section id="stuff" class="mt-16">
           <h2 class="font-display text-2xl">我最近在做</h2>
           <div class="mt-6 grid gap-4 md:grid-cols-3">
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.1s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">Oyama's HRT Tracker</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 为记录与跟踪 HRT 过程的前端小工具编写的后端程序，基本完善，不定期维护。
               </p>
               <a
-                class="meow-pill mt-4 inline-flex"
+                class="meow-pill motion-press mt-4 inline-flex"
                 href="https://github.com/meowhuan/Oyama-s-HRT-Tracker"
                 target="_blank"
                 rel="noreferrer"
@@ -402,19 +443,27 @@ watch(isNight, () => {
                 查看项目
               </a>
             </article>
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.35s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">技能积累</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 随缘学习新技能，但是不知道学什么好，感觉什么都想学又什么都学不好。
               </p>
-              <span class="meow-pill mt-4">学习中</span>
+              <span class="meow-pill motion-press mt-4">学习中</span>
             </article>
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.6s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">小记录</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 偶尔记录一些日常小事，想记录但又不想记录，感觉有点矛盾 ( •̥́ ˍ •̀ू )。
               </p>
-              <span class="meow-pill mt-4">随缘更新</span>
+              <span class="meow-pill motion-press mt-4">随缘更新</span>
             </article>
           </div>
         </section>
@@ -422,15 +471,27 @@ watch(isNight, () => {
         <section id="contact" class="mt-16">
           <h2 class="font-display text-2xl">联系我</h2>
           <div class="mt-6 grid gap-4 md:grid-cols-3">
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.1s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">邮箱</h3>
               <p class="mt-3 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">meowhuan@qq.com</p>
             </article>
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.35s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">GitHub</h3>
               <p class="mt-3 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">github.com/meowhuan</p>
             </article>
-            <article class="meow-card p-5" :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.6s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">X</h3>
               <p class="mt-3 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">x.com/meow_huan</p>
             </article>
@@ -442,7 +503,8 @@ watch(isNight, () => {
             <h2 class="font-display text-2xl" :class="isNight ? 'text-meow-night-ink' : ''">互动留言板</h2>
           </div>
           <div
-            class="relative mt-4 rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)] transition-colors duration-700 ease-in-out"
+            class="relative mt-4 rounded-3xl p-4 shadow-[0_14px_30px_rgba(47,20,47,0.12)] transition-colors duration-700 ease-in-out motion-card"
+            style="--float-delay: 0.25s"
             :class="isNight ? 'bg-meow-night-card/80' : 'bg-white/70'"
           >
             <div id="giscus" class="relative z-1"></div>
@@ -551,6 +613,80 @@ watch(isNight, () => {
 @media (max-width: 640px) {
   .cord-switch {
     right: 100px;
+  }
+}
+
+.motion-card {
+  animation: floatSoft 8s ease-in-out infinite;
+  animation-delay: var(--float-delay, 0s);
+  transition: transform 0.5s ease, box-shadow 0.5s ease;
+}
+
+.motion-card:hover {
+  transform: translateY(-6px) scale(1.01);
+  box-shadow: 0 16px 32px rgba(47, 20, 47, 0.14);
+}
+
+.motion-press {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.motion-press:hover {
+  transform: translateY(-2px);
+}
+
+.motion-press:active {
+  transform: translateY(0);
+}
+
+.nav-link {
+  position: relative;
+  padding-bottom: 2px;
+  transition: color 0.2s ease;
+}
+
+.nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100%;
+  height: 2px;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: linear-gradient(90deg, rgba(255, 173, 214, 0.8), rgba(165, 235, 255, 0.7));
+  transition: transform 0.25s ease;
+}
+
+.nav-link:hover::after {
+  transform: scaleX(1);
+}
+
+@keyframes floatSoft {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-card {
+    animation: none;
+  }
+
+  .motion-card:hover,
+  .motion-press:hover,
+  .motion-press:active {
+    transform: none;
+  }
+
+  .nav-link::after {
+    transition: none;
   }
 }
 
