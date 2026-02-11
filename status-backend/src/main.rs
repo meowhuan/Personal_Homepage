@@ -321,7 +321,7 @@ async fn schedule_admin_page() -> impl IntoResponse {
       .content {
         padding: 18px;
       }
-      textarea, input {
+      textarea, input, select {
         width: 100%;
         box-sizing: border-box;
         border-radius: 12px;
@@ -330,10 +330,6 @@ async fn schedule_admin_page() -> impl IntoResponse {
         font-size: 13px;
         background: rgba(255, 255, 255, 0.8);
       }
-      textarea {
-        min-height: 260px;
-        font-family: "JetBrains Mono", "Consolas", monospace;
-      }
       .row {
         display: flex;
         gap: 12px;
@@ -341,6 +337,40 @@ async fn schedule_admin_page() -> impl IntoResponse {
       }
       .row > div {
         flex: 1;
+      }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        margin: 12px 0;
+        flex-wrap: wrap;
+      }
+      .list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .item {
+        border-radius: 16px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.7);
+        padding: 12px;
+      }
+      .item-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: #7b6b7a;
+      }
+      .item-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+      .item-note {
+        margin-top: 10px;
       }
       button {
         border: 0;
@@ -360,6 +390,14 @@ async fn schedule_admin_page() -> impl IntoResponse {
         margin-top: 8px;
         font-size: 12px;
         color: #7b6b7a;
+      }
+      .ghost {
+        background: rgba(255, 255, 255, 0.9);
+        color: #2b1d2a;
+        border: 1px solid #eadbea;
+      }
+      .danger {
+        background: #a03555;
       }
     </style>
   </head>
@@ -381,31 +419,98 @@ async fn schedule_admin_page() -> impl IntoResponse {
               <input id="api" type="text" value="/schedule" />
             </div>
           </div>
-          <label>行程表 JSON</label>
-          <textarea id="payload"></textarea>
-          <div class="row">
-            <button id="load">加载</button>
+          <div class="toolbar">
+            <button id="add">新增行程</button>
+            <button id="load" class="ghost">加载</button>
             <button id="save">保存</button>
           </div>
-          <div class="hint">格式：{ "items": [ { "title": "...", "time": "...", "note": "...", "location": "...", "tag": "...", "sort_order": 0 } ] }</div>
+          <div class="list" id="list"></div>
+          <div class="hint">提示：时间/标题必填，其它可留空。拖拽排序暂不支持，可用“排序”字段。</div>
           <div class="status" id="status"></div>
         </div>
       </div>
     </div>
     <script>
       const statusEl = document.getElementById("status");
-      const payloadEl = document.getElementById("payload");
       const tokenEl = document.getElementById("token");
       const apiEl = document.getElementById("api");
+      const listEl = document.getElementById("list");
 
       const setStatus = (text) => { statusEl.textContent = text; };
+
+      const createItem = (item = {}) => {
+        const wrap = document.createElement("div");
+        wrap.className = "item";
+        wrap.innerHTML = `
+          <div class="item-header">
+            <span>行程项</span>
+            <button class="danger" data-remove>删除</button>
+          </div>
+          <div class="item-grid">
+            <div>
+              <label>时间 *</label>
+              <input data-time placeholder="如：今晚 19:00" value="${item.time || ""}" />
+            </div>
+            <div>
+              <label>标题 *</label>
+              <input data-title placeholder="如：晚饭" value="${item.title || ""}" />
+            </div>
+            <div>
+              <label>地点</label>
+              <input data-location placeholder="如：咖啡馆" value="${item.location || ""}" />
+            </div>
+            <div>
+              <label>标签</label>
+              <input data-tag placeholder="如：私事" value="${item.tag || ""}" />
+            </div>
+            <div>
+              <label>排序</label>
+              <input data-sort type="number" placeholder="0" value="${item.sort_order ?? ""}" />
+            </div>
+          </div>
+          <div class="item-note">
+            <label>备注</label>
+            <input data-note placeholder="可选" value="${item.note || ""}" />
+          </div>
+        `;
+        wrap.querySelector("[data-remove]").addEventListener("click", () => {
+          wrap.remove();
+        });
+        return wrap;
+      };
+
+      const readItems = () => {
+        const items = [];
+        listEl.querySelectorAll(".item").forEach((el, idx) => {
+          const time = el.querySelector("[data-time]").value.trim();
+          const title = el.querySelector("[data-title]").value.trim();
+          if (!time || !title) return;
+          const location = el.querySelector("[data-location]").value.trim();
+          const tag = el.querySelector("[data-tag]").value.trim();
+          const note = el.querySelector("[data-note]").value.trim();
+          const sortRaw = el.querySelector("[data-sort]").value.trim();
+          items.push({
+            time,
+            title,
+            location: location || undefined,
+            tag: tag || undefined,
+            note: note || undefined,
+            sort_order: sortRaw === "" ? idx : Number(sortRaw)
+          });
+        });
+        return items;
+      };
 
       const loadSchedule = async () => {
         try {
           setStatus("加载中...");
           const res = await fetch(apiEl.value);
           const items = await res.json();
-          payloadEl.value = JSON.stringify({ items }, null, 2);
+          listEl.innerHTML = "";
+          items.forEach((item) => listEl.appendChild(createItem(item)));
+          if (items.length === 0) {
+            listEl.appendChild(createItem());
+          }
           setStatus("已加载");
         } catch (err) {
           setStatus("加载失败");
@@ -414,7 +519,7 @@ async fn schedule_admin_page() -> impl IntoResponse {
 
       const saveSchedule = async () => {
         try {
-          const payload = JSON.parse(payloadEl.value);
+          const payload = { items: readItems() };
           setStatus("保存中...");
           const res = await fetch(apiEl.value, {
             method: "POST",
@@ -430,6 +535,9 @@ async fn schedule_admin_page() -> impl IntoResponse {
         }
       };
 
+      document.getElementById("add").addEventListener("click", () => {
+        listEl.appendChild(createItem());
+      });
       document.getElementById("load").addEventListener("click", loadSchedule);
       document.getElementById("save").addEventListener("click", saveSchedule);
       loadSchedule();
