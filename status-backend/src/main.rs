@@ -74,7 +74,7 @@ async fn main() {
 
     let db_path = std::env::var("STATUS_DB").unwrap_or_else(|_| "status.db".to_string());
     let token = std::env::var("STATUS_TOKEN").unwrap_or_else(|_| "KFCVME50".to_string());
-    let port = std::env::var("STATUS_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(799);
+    let port = std::env::var("STATUS_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(7999);
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -110,6 +110,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(|| async { "ok" }))
+        .route("/version", get(|| async { "status-backend v1.0" }))
         .route("/heartbeat", post(heartbeat))
         .route("/device", get(delete_device))
         .route("/status", get(status))
