@@ -1,6 +1,37 @@
 :root {
   --color-border-default: transparent !important;
   --color-border-muted: transparent !important;
+  --color-fg-default: #e9dcff !important;
+  --color-fg-muted: #b8a6d8 !important;
+  --color-fg-subtle: #9b8bbd !important;
+  --color-canvas-default: transparent !important;
+  --color-canvas-subtle: #1a1a2e !important;
+}
+
+html,
+body {
+  color-scheme: dark;
+  background: transparent !important;
+  color: #e9dcff !important;
+}
+
+.gsc-main,
+.gsc-comment,
+.gsc-comment-content,
+.gsc-comment-content p,
+.gsc-comment-box-textarea,
+.gsc-comment-header,
+.gsc-comment-footer {
+  color: #e9dcff !important;
+}
+
+.gsc-comment-content a {
+  color: #88f3ff !important;
+}
+
+.gsc-comment-content code,
+.gsc-comment-content pre {
+  color: #e9dcff !important;
 }
 
 /* 1. 去线化 */

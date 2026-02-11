@@ -1,6 +1,37 @@
 :root {
   --color-border-default: transparent !important;
   --color-border-muted: transparent !important;
+  --color-fg-default: #2b1d2a !important;
+  --color-fg-muted: #6b5f57 !important;
+  --color-fg-subtle: #8a7a86 !important;
+  --color-canvas-default: transparent !important;
+  --color-canvas-subtle: #fff7fb !important;
+}
+
+html,
+body {
+  color-scheme: light;
+  background: transparent !important;
+  color: #2b1d2a !important;
+}
+
+.gsc-main,
+.gsc-comment,
+.gsc-comment-content,
+.gsc-comment-content p,
+.gsc-comment-box-textarea,
+.gsc-comment-header,
+.gsc-comment-footer {
+  color: #2b1d2a !important;
+}
+
+.gsc-comment-content a {
+  color: #b24b7a !important;
+}
+
+.gsc-comment-content code,
+.gsc-comment-content pre {
+  color: #2b1d2a !important;
 }
 
 /* 1. 全局去线：移除所有容器边框 */

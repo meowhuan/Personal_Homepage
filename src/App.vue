@@ -176,8 +176,8 @@ const loadGiscus = () => {
   script.setAttribute(
     "data-theme",
     isNight.value
-      ? "https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus-dark.css?v=${Date.now()}"
-      : "https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus.css?v=${Date.now()}"
+      ? `https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus-dark.css?v=${Date.now()}`
+      : `https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus.css?v=${Date.now()}`
   );
   script.setAttribute("data-lang", "zh-CN");
   container.appendChild(script);
@@ -191,8 +191,8 @@ const updateGiscusTheme = () => {
       giscus: {
         setConfig: {
           theme: isNight.value
-          ? "https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus-dark.css?v=${Date.now()}"
-          : "https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus.css?v=${Date.now()}"
+          ? `https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus-dark.css?v=${Date.now()}`
+          : `https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus.css?v=${Date.now()}`
         }
       }
     },
