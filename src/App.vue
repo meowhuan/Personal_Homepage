@@ -24,6 +24,8 @@ const scheduleError = ref(false);
 const scheduleUrl = "https://m.ratf.cn/schedule";
 const scheduleLoading = ref(false);
 const scheduleUpdatedAt = ref(0);
+const scheduleNextAt = ref(0);
+const scheduleCooldownMs = 5000;
 const hasOnlineDevice = computed(() =>
   statusList.value.some((item) => item?.online)
 );
@@ -108,6 +110,7 @@ const fetchQuote = () => {
 };
 
 const canFetchStatus = () => Date.now() >= statusNextAt.value;
+const canFetchSchedule = () => Date.now() >= scheduleNextAt.value;
 
 const fetchStatus = async () => {
   if (!canFetchStatus()) return;
@@ -130,6 +133,8 @@ const fetchStatus = async () => {
 };
 
 const fetchSchedule = async () => {
+  if (!canFetchSchedule()) return;
+  scheduleNextAt.value = Date.now() + scheduleCooldownMs;
   scheduleLoading.value = true;
   try {
     const res = await fetch(scheduleUrl);
@@ -349,53 +354,6 @@ watch(isNight, () => {
               </a>
             </div>
 
-            <div id="schedule" class="pt-2">
-              <div
-                class="meow-window meow-card motion-card mt-6 rounded-3xl px-5 py-4 text-xs backdrop-blur"
-                :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
-              >
-                <div class="meow-window-bar">
-                  <span class="meow-window-dots"></span>
-                  <span class="meow-window-title">Meow Schedule</span>
-                  <button
-                    class="meow-pill motion-press px-2 py-0.5 text-[11px]"
-                    type="button"
-                    :class="[
-                      scheduleLoading ? 'opacity-50' : '',
-                      isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''
-                    ]"
-                    :disabled="scheduleLoading"
-                    @click="fetchSchedule()"
-                  >
-                    {{ scheduleLoading ? "刷新中" : "刷新" }}
-                  </button>
-                </div>
-                <div class="meow-window-body">
-                  <div class="text-[11px]" v-if="scheduleUpdatedAt">
-                    更新于 {{ new Date(scheduleUpdatedAt).toLocaleTimeString("zh-CN") }}
-                  </div>
-                  <div v-if="scheduleError" class="mt-2 text-sm">暂时无法获取</div>
-                  <div v-else-if="scheduleList.length === 0" class="mt-2 text-sm">暂无行程</div>
-                  <div v-else class="mt-3 space-y-3">
-                    <div
-                      v-for="item in scheduleList"
-                      :key="item.id"
-                      class="meow-window-item"
-                    >
-                      <div class="meow-window-time">{{ item.time }}</div>
-                      <div class="meow-window-content">
-                        <div class="meow-window-titleline">
-                          <span class="meow-window-name">{{ item.title }}</span>
-                          <span v-if="item.tag" class="meow-pill">{{ item.tag }}</span>
-                        </div>
-                        <div v-if="item.location" class="meow-window-meta">地点：{{ item.location }}</div>
-                        <div v-if="item.note" class="meow-window-note">{{ item.note }}</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
           </div>
 
           <div
@@ -457,22 +415,6 @@ watch(isNight, () => {
                   </span>
                 </div>
               </div>
-              <div
-                class="mt-3 meow-mini-widget meow-mood-widget flex items-start gap-3 rounded-3xl px-5 py-4 text-xs backdrop-blur"
-                :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
-              >
-                <div class="flex-1 leading-tight">
-                  <div class="text-[11px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                    今日心情
-                  </div>
-                  <div class="mt-1 text-sm font-600" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">
-                    慢慢来，也很好
-                  </div>
-                  <div class="mt-1 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                    —— 留给今天的小温柔
-                  </div>
-                </div>
-              </div>
             </div>
             </div>
           </div>
@@ -517,6 +459,53 @@ watch(isNight, () => {
         <section id="stuff" class="mt-16">
           <h2 class="font-display text-2xl">我最近在做</h2>
           <div class="mt-6 grid gap-4 md:grid-cols-3">
+            <div
+              id="schedule"
+              class="meow-window meow-card motion-card p-5 md:col-span-3"
+              style="--float-delay: 0.15s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
+            >
+              <div class="meow-window-bar">
+                <span class="meow-window-dots"></span>
+                <span class="meow-window-title">Meow Schedule</span>
+                <button
+                  class="meow-pill motion-press px-2 py-0.5 text-[11px]"
+                  type="button"
+                  :class="[
+                    (!canFetchSchedule() || scheduleLoading) ? 'opacity-50' : '',
+                    isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''
+                  ]"
+                  :disabled="scheduleLoading || !canFetchSchedule()"
+                  @click="fetchSchedule()"
+                >
+                  {{ scheduleLoading ? "刷新中" : (canFetchSchedule() ? "刷新" : "冷却中") }}
+                </button>
+              </div>
+              <div class="meow-window-body">
+                <div class="text-[11px]" v-if="scheduleUpdatedAt">
+                  更新于 {{ new Date(scheduleUpdatedAt).toLocaleTimeString("zh-CN") }}
+                </div>
+                <div v-if="scheduleError" class="mt-2 text-sm">暂时无法获取</div>
+                <div v-else-if="scheduleList.length === 0" class="mt-2 text-sm">暂无行程</div>
+                <div v-else class="mt-3 space-y-3">
+                  <div
+                    v-for="item in scheduleList"
+                    :key="item.id"
+                    class="meow-window-item"
+                  >
+                    <div class="meow-window-time">{{ item.time }}</div>
+                    <div class="meow-window-content">
+                      <div class="meow-window-titleline">
+                        <span class="meow-window-name">{{ item.title }}</span>
+                        <span v-if="item.tag" class="meow-pill">{{ item.tag }}</span>
+                      </div>
+                      <div v-if="item.location" class="meow-window-meta">地点：{{ item.location }}</div>
+                      <div v-if="item.note" class="meow-window-note">{{ item.note }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
             <article
               class="meow-card motion-card p-5"
               style="--float-delay: 0.1s"
@@ -856,36 +845,6 @@ watch(isNight, () => {
   padding-right: 4px;
 }
 
-.meow-mini-widget {
-  border-radius: 14px;
-  border: none;
-  background: transparent;
-}
-
-.meow-mood-widget {
-  margin-top: auto;
-  min-height: 72px;
-  align-self: stretch;
-  text-align: center;
-}
-
-.meow-card .meow-mini-widget {
-  margin-top: 6px;
-}
-
-.meow-card .meow-mini-widget .text-meow-night-ink,
-.meow-card .meow-mini-widget .text-meow-ink {
-  font-weight: 600;
-}
-
-.meow-card .meow-mini-widget {
-  color: inherit;
-}
-
-.meow-card .meow-mini-widget.text-meow-night-soft {
-  border-color: rgba(74, 64, 110, 0.8);
-  background: rgba(35, 28, 58, 0.75);
-}
 
 @media (max-width: 640px) {
   .quick-card {
