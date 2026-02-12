@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::{Datelike, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -66,6 +67,19 @@ struct ScheduleItemInput {
     sort_order: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct VisitPayload {
+    visitor_id: String,
+}
+
+#[derive(Serialize)]
+struct VisitorStats {
+    today: i64,
+    month: i64,
+    total: i64,
+    updated_at: i64,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -94,6 +108,12 @@ async fn main() {
             tag TEXT,
             sort_order INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS visitor_visits (
+            visitor_id TEXT NOT NULL,
+            visit_date TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (visitor_id, visit_date)
         );",
     )
     .expect("init db");
@@ -116,6 +136,8 @@ async fn main() {
         .route("/status", get(status))
         .route("/schedule", get(schedule_list).post(schedule_update))
         .route("/schedule/admin", get(schedule_admin_page))
+        .route("/visitor", get(visitor_stats))
+        .route("/visitor/visit", post(visitor_visit))
         .with_state(state)
         .layer(cors);
 
@@ -548,6 +570,51 @@ async fn schedule_admin_page() -> impl IntoResponse {
     )
 }
 
+async fn visitor_visit(
+    State(state): State<AppState>,
+    Json(payload): Json<VisitPayload>,
+) -> impl IntoResponse {
+    let now = now_ts();
+    let today = today_key();
+    let conn = state.db.lock().unwrap();
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO visitor_visits (visitor_id, visit_date, created_at)
+         VALUES (?1, ?2, ?3)",
+        params![payload.visitor_id, today, now],
+    );
+    StatusCode::OK
+}
+
+async fn visitor_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let now = now_ts();
+    let today = today_key();
+    let month_prefix = month_key();
+    let conn = state.db.lock().unwrap();
+    let today_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM visitor_visits WHERE visit_date = ?1",
+            params![today],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let month_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM visitor_visits WHERE visit_date LIKE ?1",
+            params![format!("{}-%", month_prefix)],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let total_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM visitor_visits", [], |row| row.get(0))
+        .unwrap_or(0);
+    Json(VisitorStats {
+        today: today_count,
+        month: month_count,
+        total: total_count,
+        updated_at: now,
+    })
+}
+
 #[derive(Deserialize)]
 struct DeleteQuery {
     id: String,
@@ -587,4 +654,14 @@ fn now_ts() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+}
+
+fn today_key() -> String {
+    let now = Utc::now();
+    format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day())
+}
+
+fn month_key() -> String {
+    let now = Utc::now();
+    format!("{:04}-{:02}", now.year(), now.month())
 }

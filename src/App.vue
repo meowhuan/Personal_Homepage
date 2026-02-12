@@ -26,6 +26,17 @@ const scheduleLoading = ref(false);
 const scheduleUpdatedAt = ref(0);
 const scheduleNextAt = ref(0);
 const scheduleCooldownMs = 5000;
+const visitorCount = ref(0);
+const visitorToday = ref(0);
+const visitorMonth = ref(0);
+const visitorLoading = ref(false);
+const visitorError = ref(false);
+const visitorUpdatedAt = ref(0);
+const visitorNextAt = ref(0);
+const visitorCooldownMs = 5000;
+const visitorUrl = "https://m.ratf.cn/visitor";
+const visitorVisitUrl = "https://m.ratf.cn/visitor/visit";
+const visitorIdKey = "meow-visitor-id";
 const hasOnlineDevice = computed(() =>
   statusList.value.some((item) => item?.online)
 );
@@ -71,6 +82,8 @@ onMounted(() => {
   fetchQuote();
   fetchStatus();
   fetchSchedule();
+  initVisitorId();
+  fetchVisitorStats();
   setInterval(fetchStatus, 60000);
   setInterval(fetchSchedule, 120000);
   const savedTheme = localStorage.getItem("meow-theme");
@@ -80,6 +93,7 @@ onMounted(() => {
     isNight.value = window.matchMedia("(prefers-color-scheme: dark)").matches;
   }
   loadGiscus();
+  recordVisitorVisit();
 });
 
 onBeforeUnmount(() => {
@@ -157,6 +171,49 @@ const toggleTheme = () => {
   localStorage.setItem("meow-theme", isNight.value ? "night" : "day");
 };
 
+const initVisitorId = () => {
+  const existing = localStorage.getItem(visitorIdKey);
+  if (existing) return existing;
+  const id = `v-${crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2)}`;
+  localStorage.setItem(visitorIdKey, id);
+  return id;
+};
+
+const canFetchVisitor = () => Date.now() >= visitorNextAt.value;
+
+const fetchVisitorStats = async () => {
+  if (!canFetchVisitor()) return;
+  visitorNextAt.value = Date.now() + visitorCooldownMs;
+  visitorLoading.value = true;
+  try {
+    const res = await fetch(visitorUrl);
+    if (!res.ok) throw new Error("visitor fetch failed");
+    const data = await res.json();
+    visitorToday.value = Number(data?.today || 0);
+    visitorMonth.value = Number(data?.month || 0);
+    visitorCount.value = Number(data?.total || 0);
+    visitorUpdatedAt.value = Date.now();
+    visitorError.value = false;
+  } catch {
+    visitorError.value = true;
+  } finally {
+    visitorLoading.value = false;
+  }
+};
+
+const recordVisitorVisit = async () => {
+  const visitorId = initVisitorId();
+  try {
+    await fetch(visitorVisitUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ visitor_id: visitorId })
+    });
+  } finally {
+    fetchVisitorStats();
+  }
+};
+
 const loadGiscus = () => {
   const container = document.getElementById("giscus");
   if (!container || container.hasChildNodes()) return;
@@ -207,10 +264,10 @@ watch(isNight, () => {
 
 <template>
   <div
-    class="min-h-screen font-body page-fade transition-colors duration-700 ease-in-out"
+    class="min-h-screen font-body page-fade transition-colors duration-700 ease-in-out meow-bg"
     :class="isNight
-      ? 'bg-gradient-to-br from-meow-night-bg via-[#201a3f] to-[#16162a] text-meow-night-ink'
-      : 'bg-gradient-to-br from-meow-bg via-[#fff6fb] to-[#f2f0ff] text-meow-ink'"
+      ? 'bg-gradient-to-br from-meow-night-bg via-[#201a3f] to-[#16162a] text-meow-night-ink meow-night'
+      : 'bg-gradient-to-br from-meow-bg via-[#fff6fb] to-[#f2f0ff] text-meow-ink meow-day'"
   >
     <div class="relative overflow-hidden">
       <div
@@ -579,6 +636,70 @@ watch(isNight, () => {
           </div>
         </section>
 
+        <section id="visitor" class="mt-16">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 class="font-display text-2xl" :class="isNight ? 'text-meow-night-ink' : ''">喵喵计数器</h2>
+            <span class="meow-pill meow-pill-strong">自动记录</span>
+          </div>
+          <div
+            class="meow-card motion-card mt-4 grid gap-3 rounded-[20px] px-4 py-3 md:grid-cols-[1fr_auto]"
+            style="--float-delay: 0.2s"
+            :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+          >
+            <div class="flex flex-col justify-between gap-2">
+              <div>
+                <div class="meow-title text-[13px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">喵爪印记</div>
+                <p class="mt-2 text-[12px] leading-[1.7]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                  每台设备每天留一次爪印。
+                </p>
+              </div>
+              <div class="text-[11px] flex items-center gap-2" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                <span v-if="visitorLoading">统计更新中</span>
+                <span v-else-if="visitorError" class="flex items-center gap-2">
+                  <span class="status-dot status-dot-error"></span>
+                  <span>统计获取失败</span>
+                  <svg class="meow-sad" viewBox="0 0 64 64" aria-hidden="true">
+                    <circle cx="30" cy="32" r="14" fill="none" stroke="currentColor" stroke-width="3" />
+                    <path d="M22 34c4 2 8 2 12 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                    <path d="M24 28c2-3 6-4 10-2" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                    <path d="M12 40c8 2 12 6 14 12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+                  </svg>
+                </span>
+                <span v-else-if="visitorUpdatedAt">更新于 {{ new Date(visitorUpdatedAt).toLocaleTimeString("zh-CN") }}</span>
+              </div>
+            </div>
+            <div class="grid gap-2 sm:grid-cols-3">
+              <div
+                class="paw-card rounded-[20px] border px-3 py-2"
+                :class="isNight
+                  ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink'
+                  : 'border-meow-line bg-white/70 text-meow-ink'"
+              >
+                <div class="text-[10px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">今日</div>
+                <div class="mt-1 text-3xl font-700">{{ visitorToday }}</div>
+              </div>
+              <div
+                class="paw-card rounded-[20px] border px-3 py-2"
+                :class="isNight
+                  ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink'
+                  : 'border-meow-line bg-white/70 text-meow-ink'"
+              >
+                <div class="text-[10px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">本月</div>
+                <div class="mt-1 text-3xl font-700">{{ visitorMonth }}</div>
+              </div>
+              <div
+                class="paw-card rounded-[20px] border px-3 py-2"
+                :class="isNight
+                  ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink'
+                  : 'border-meow-line bg-white/70 text-meow-ink'"
+              >
+                <div class="text-[10px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">总计</div>
+                <div class="mt-1 text-3xl font-700">{{ visitorCount }}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section id="guestbook" class="mt-16">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <h2 class="font-display text-2xl" :class="isNight ? 'text-meow-night-ink' : ''">互动留言板</h2>
@@ -623,6 +744,26 @@ watch(isNight, () => {
 
 .page-fade {
   animation: pageFade 0.8s cubic-bezier(0.22, 1.2, 0.36, 1) both;
+}
+
+.meow-bg {
+  position: relative;
+}
+
+.meow-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23bca6d9'%3E%3Ccircle cx='24' cy='24' r='6'/%3E%3Ccircle cx='44' cy='18' r='6'/%3E%3Ccircle cx='64' cy='24' r='6'/%3E%3Ccircle cx='32' cy='48' r='12'/%3E%3Ccircle cx='84' cy='84' r='6'/%3E%3Ccircle cx='104' cy='78' r='6'/%3E%3Ccircle cx='96' cy='56' r='6'/%3E%3Ccircle cx='88' cy='100' r='12'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 140px 140px;
+  background-position: 0 0;
+}
+
+.meow-bg.meow-night::before {
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%235a6bb8'%3E%3Ccircle cx='24' cy='24' r='6'/%3E%3Ccircle cx='44' cy='18' r='6'/%3E%3Ccircle cx='64' cy='24' r='6'/%3E%3Ccircle cx='32' cy='48' r='12'/%3E%3Ccircle cx='84' cy='84' r='6'/%3E%3Ccircle cx='104' cy='78' r='6'/%3E%3Ccircle cx='96' cy='56' r='6'/%3E%3Ccircle cx='88' cy='100' r='12'/%3E%3C/g%3E%3C/svg%3E");
 }
 
 .cord-switch {
@@ -843,6 +984,87 @@ watch(isNight, () => {
   flex-direction: column;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.meow-title {
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.meow-pill-strong {
+  padding: 2px 10px;
+  background: linear-gradient(90deg, rgba(201, 170, 236, 0.9), rgba(164, 210, 255, 0.9));
+  color: #2b1d2a;
+  border: 0;
+  box-shadow: 0 8px 16px rgba(90, 60, 120, 0.2);
+  transform-origin: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.meow-pill-strong:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 10px 20px rgba(90, 60, 120, 0.25);
+}
+
+.paw-card {
+  position: relative;
+  background: linear-gradient(140deg, rgba(255, 220, 236, 0.8), rgba(220, 230, 255, 0.75));
+  backdrop-filter: blur(10px);
+}
+
+.paw-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.meow-night .paw-card {
+  background: linear-gradient(140deg, rgba(120, 140, 230, 0.35), rgba(84, 110, 200, 0.35));
+}
+
+.paw-card::before {
+  content: "";
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 26px;
+  height: 22px;
+  opacity: 0.35;
+  z-index: 0;
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg width='68' height='56' viewBox='0 0 68 56' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff'%3E%3Ccircle cx='18' cy='16' r='6'/%3E%3Ccircle cx='34' cy='12' r='6'/%3E%3Ccircle cx='50' cy='16' r='6'/%3E%3Ccircle cx='30' cy='38' r='12'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.meow-night .paw-card::before {
+  opacity: 0.3;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg width='68' height='56' viewBox='0 0 68 56' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23d7e2ff'%3E%3Ccircle cx='18' cy='16' r='6'/%3E%3Ccircle cx='34' cy='12' r='6'/%3E%3Ccircle cx='50' cy='16' r='6'/%3E%3Ccircle cx='30' cy='38' r='12'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot-error {
+  background: rgba(235, 86, 120, 0.9);
+  box-shadow: 0 0 0 4px rgba(235, 86, 120, 0.18);
+}
+
+.meow-sad {
+  width: 22px;
+  height: 22px;
+  color: rgba(235, 86, 120, 0.9);
+}
+
+@media (max-width: 640px) {
+  .paw-card::before {
+    bottom: 4px;
+    right: 4px;
+    width: 22px;
+    height: 18px;
+  }
 }
 
 
