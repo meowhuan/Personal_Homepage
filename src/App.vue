@@ -409,6 +409,13 @@ watch(isNight, () => {
               >
                 X
               </a>
+              <a
+                class="meow-btn-ghost motion-press"
+                :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+                href="/donate.html"
+              >
+                喵喵补给站
+              </a>
             </div>
 
           </div>

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500" role="img" aria-labelledby="title desc">
+  <title id="title">支付宝赞赏码占位图</title>
+  <desc id="desc">用于替换为真实支付宝收款码的占位图</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e9f4ff" />
+      <stop offset="100%" stop-color="#f3f9ff" />
+    </linearGradient>
+  </defs>
+  <rect width="800" height="500" fill="url(#bg)" />
+  <rect x="220" y="90" width="360" height="320" rx="24" fill="#ffffff" stroke="#c7ddf7" stroke-width="4" />
+  <g fill="#1685e3">
+    <rect x="280" y="150" width="28" height="28" />
+    <rect x="324" y="150" width="28" height="28" />
+    <rect x="412" y="150" width="28" height="28" />
+    <rect x="456" y="150" width="28" height="28" />
+    <rect x="500" y="150" width="28" height="28" />
+    <rect x="280" y="194" width="28" height="28" />
+    <rect x="368" y="194" width="28" height="28" />
+    <rect x="412" y="194" width="28" height="28" />
+    <rect x="500" y="194" width="28" height="28" />
+    <rect x="280" y="238" width="28" height="28" />
+    <rect x="324" y="238" width="28" height="28" />
+    <rect x="368" y="238" width="28" height="28" />
+    <rect x="456" y="238" width="28" height="28" />
+    <rect x="500" y="238" width="28" height="28" />
+    <rect x="324" y="282" width="28" height="28" />
+    <rect x="368" y="282" width="28" height="28" />
+    <rect x="412" y="282" width="28" height="28" />
+    <rect x="456" y="282" width="28" height="28" />
+  </g>
+  <text x="400" y="440" text-anchor="middle" font-size="28" fill="#136bb5" font-family="sans-serif">替换为你的支付宝收款码</text>
+</svg>
