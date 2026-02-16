@@ -72,6 +72,45 @@ struct VisitPayload {
     visitor_id: String,
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+struct BlogPost {
+    slug: String,
+    title: String,
+    date: String,
+    tag: Option<String>,
+    excerpt: String,
+    content: Vec<String>,
+    sort_order: i64,
+    updated_at: i64,
+}
+
+#[derive(Serialize)]
+struct BlogPostSummary {
+    slug: String,
+    title: String,
+    date: String,
+    tag: Option<String>,
+    excerpt: String,
+    sort_order: i64,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct BlogPayload {
+    items: Vec<BlogPostInput>,
+}
+
+#[derive(Deserialize)]
+struct BlogPostInput {
+    slug: Option<String>,
+    title: String,
+    date: String,
+    tag: Option<String>,
+    excerpt: Option<String>,
+    content: Vec<String>,
+    sort_order: Option<i64>,
+}
+
 #[derive(Serialize)]
 struct VisitorStats {
     today: i64,
@@ -114,6 +153,16 @@ async fn main() {
             visit_date TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             PRIMARY KEY (visitor_id, visit_date)
+        );
+        CREATE TABLE IF NOT EXISTS blog_posts (
+            slug TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            date TEXT NOT NULL,
+            tag TEXT,
+            excerpt TEXT NOT NULL,
+            content_json TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
         );",
     )
     .expect("init db");
@@ -136,6 +185,9 @@ async fn main() {
         .route("/status", get(status))
         .route("/schedule", get(schedule_list).post(schedule_update))
         .route("/schedule/admin", get(schedule_admin_page))
+        .route("/blog", get(blog_list).post(blog_update))
+        .route("/blog/:slug", get(blog_detail))
+        .route("/blog/admin", get(blog_admin_page))
         .route("/visitor", get(visitor_stats))
         .route("/visitor/visit", post(visitor_visit))
         .with_state(state)
@@ -568,6 +620,446 @@ async fn schedule_admin_page() -> impl IntoResponse {
   </body>
 </html>"#,
     )
+}
+
+async fn blog_admin_page() -> impl IntoResponse {
+    Html(
+        r#"<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 博客管理</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Kalam", "Segoe UI", sans-serif;
+        background: linear-gradient(140deg, #fff1f7, #f5f4ff);
+        color: #2b1d2a;
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 24px auto;
+        padding: 24px;
+      }
+      .window {
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.75);
+        box-shadow: 0 16px 36px rgba(47, 20, 47, 0.12);
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        overflow: hidden;
+      }
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: linear-gradient(90deg, rgba(255, 219, 235, 0.9), rgba(209, 244, 255, 0.9));
+        font-size: 14px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #f0b1c9;
+        box-shadow: 16px 0 0 #f6d48f, 32px 0 0 #b9efdf;
+      }
+      .content {
+        padding: 18px;
+      }
+      textarea, input {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        padding: 10px 12px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.8);
+      }
+      textarea {
+        min-height: 88px;
+        resize: vertical;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .row > div {
+        flex: 1;
+      }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        margin: 12px 0;
+        flex-wrap: wrap;
+      }
+      .list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .item {
+        border-radius: 16px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.7);
+        padding: 12px;
+      }
+      .item-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: #7b6b7a;
+      }
+      .item-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+      .item-note {
+        margin-top: 10px;
+      }
+      button {
+        border: 0;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: #2b1d2a;
+        color: #fff;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .hint {
+        font-size: 12px;
+        color: #7b6b7a;
+        margin-top: 8px;
+      }
+      .status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #7b6b7a;
+      }
+      .ghost {
+        background: rgba(255, 255, 255, 0.9);
+        color: #2b1d2a;
+        border: 1px solid #eadbea;
+      }
+      .danger {
+        background: #a03555;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar">
+          <span class="dot"></span>
+          Meow Blog Admin
+        </div>
+        <div class="content">
+          <div class="row">
+            <div>
+              <label>Token</label>
+              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
+            </div>
+            <div>
+              <label>接口地址</label>
+              <input id="api" type="text" value="/blog" />
+            </div>
+          </div>
+          <div class="toolbar">
+            <button id="add">新增文章</button>
+            <button id="load" class="ghost">加载</button>
+            <button id="save">保存</button>
+          </div>
+          <div class="list" id="list"></div>
+          <div class="hint">提示：标题/日期必填。正文按段落输入，每行一段；Slug 可留空自动生成。</div>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const statusEl = document.getElementById("status");
+      const tokenEl = document.getElementById("token");
+      const apiEl = document.getElementById("api");
+      const listEl = document.getElementById("list");
+
+      const setStatus = (text) => { statusEl.textContent = text; };
+      const esc = (value = "") => value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;");
+
+      const createItem = (item = {}) => {
+        const wrap = document.createElement("div");
+        wrap.className = "item";
+        wrap.innerHTML = `
+          <div class="item-header">
+            <span>博客文章</span>
+            <button class="danger" data-remove>删除</button>
+          </div>
+          <div class="item-grid">
+            <div>
+              <label>Slug</label>
+              <input data-slug placeholder="如：my-first-post" value="${esc(item.slug || "")}" />
+            </div>
+            <div>
+              <label>标题 *</label>
+              <input data-title placeholder="如：博客开张" value="${esc(item.title || "")}" />
+            </div>
+            <div>
+              <label>日期 *</label>
+              <input data-date placeholder="如：2026-02-16" value="${esc(item.date || "")}" />
+            </div>
+            <div>
+              <label>标签</label>
+              <input data-tag placeholder="如：日常" value="${esc(item.tag || "")}" />
+            </div>
+            <div>
+              <label>排序</label>
+              <input data-sort type="number" placeholder="0" value="${item.sort_order ?? ""}" />
+            </div>
+          </div>
+          <div class="item-note">
+            <label>摘要</label>
+            <textarea data-excerpt placeholder="列表展示摘要">${esc(item.excerpt || "")}</textarea>
+          </div>
+          <div class="item-note">
+            <label>正文（每行一段）</label>
+            <textarea data-content placeholder="第一段&#10;第二段">${esc((item.content || []).join("\n"))}</textarea>
+          </div>
+        `;
+        wrap.querySelector("[data-remove]").addEventListener("click", () => {
+          wrap.remove();
+        });
+        return wrap;
+      };
+
+      const readItems = () => {
+        const items = [];
+        listEl.querySelectorAll(".item").forEach((el, idx) => {
+          const slug = el.querySelector("[data-slug]").value.trim();
+          const title = el.querySelector("[data-title]").value.trim();
+          const date = el.querySelector("[data-date]").value.trim();
+          if (!title || !date) return;
+          const tag = el.querySelector("[data-tag]").value.trim();
+          const excerpt = el.querySelector("[data-excerpt]").value.trim();
+          const sortRaw = el.querySelector("[data-sort]").value.trim();
+          const content = el
+            .querySelector("[data-content]")
+            .value
+            .split("\n")
+            .map((v) => v.trim())
+            .filter(Boolean);
+          items.push({
+            slug: slug || undefined,
+            title,
+            date,
+            tag: tag || undefined,
+            excerpt: excerpt || undefined,
+            content,
+            sort_order: sortRaw === "" ? idx : Number(sortRaw)
+          });
+        });
+        return items;
+      };
+
+      const loadBlog = async () => {
+        try {
+          setStatus("加载中...");
+          const listRes = await fetch(apiEl.value);
+          if (!listRes.ok) throw new Error("list failed");
+          const list = await listRes.json();
+          const detailTasks = list.map(async (item) => {
+            try {
+              const detailRes = await fetch(`${apiEl.value}/${encodeURIComponent(item.slug)}`);
+              if (!detailRes.ok) throw new Error("detail failed");
+              return await detailRes.json();
+            } catch (err) {
+              return { ...item, content: item.excerpt ? [item.excerpt] : [] };
+            }
+          });
+          const items = await Promise.all(detailTasks);
+          listEl.innerHTML = "";
+          items.forEach((item) => listEl.appendChild(createItem(item)));
+          if (items.length === 0) {
+            listEl.appendChild(createItem());
+          }
+          setStatus("已加载");
+        } catch (err) {
+          setStatus("加载失败");
+        }
+      };
+
+      const saveBlog = async () => {
+        try {
+          const payload = { items: readItems() };
+          setStatus("保存中...");
+          const res = await fetch(apiEl.value, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-token": tokenEl.value
+            },
+            body: JSON.stringify(payload)
+          });
+          setStatus(res.ok ? "保存成功" : "保存失败");
+        } catch (err) {
+          setStatus("保存失败");
+        }
+      };
+
+      document.getElementById("add").addEventListener("click", () => {
+        listEl.appendChild(createItem());
+      });
+      document.getElementById("load").addEventListener("click", loadBlog);
+      document.getElementById("save").addEventListener("click", saveBlog);
+      loadBlog();
+    </script>
+  </body>
+</html>"#,
+    )
+}
+
+async fn blog_list(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = match conn.prepare(
+        "SELECT slug, title, date, tag, excerpt, sort_order, updated_at
+         FROM blog_posts
+         ORDER BY sort_order ASC, date DESC, updated_at DESC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Json(Vec::<BlogPostSummary>::new()),
+    };
+
+    let rows = match stmt.query_map([], |row| {
+        Ok(BlogPostSummary {
+            slug: row.get(0)?,
+            title: row.get(1)?,
+            date: row.get(2)?,
+            tag: row.get(3)?,
+            excerpt: row.get(4)?,
+            sort_order: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Json(Vec::<BlogPostSummary>::new()),
+    };
+
+    let list: Vec<BlogPostSummary> = rows.filter_map(Result::ok).collect();
+    Json(list)
+}
+
+async fn blog_detail(
+    State(state): State<AppState>,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let row = conn.query_row(
+        "SELECT slug, title, date, tag, excerpt, content_json, sort_order, updated_at
+         FROM blog_posts
+         WHERE slug = ?1
+         LIMIT 1",
+        params![slug],
+        |row| {
+            let content_json: String = row.get(5)?;
+            let content = serde_json::from_str::<Vec<String>>(&content_json).unwrap_or_default();
+            Ok(BlogPost {
+                slug: row.get(0)?,
+                title: row.get(1)?,
+                date: row.get(2)?,
+                tag: row.get(3)?,
+                excerpt: row.get(4)?,
+                content,
+                sort_order: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        },
+    );
+
+    match row {
+        Ok(post) => (StatusCode::OK, Json(post)).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn blog_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<BlogPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let now = now_ts();
+    let mut conn = state.db.lock().unwrap();
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    if tx.execute("DELETE FROM blog_posts", []).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    for (idx, item) in payload.items.into_iter().enumerate() {
+        let mut slug = item.slug.unwrap_or_else(|| format!("post-{}-{}", now, idx));
+        slug = slug
+            .trim()
+            .to_lowercase()
+            .replace(' ', "-")
+            .chars()
+            .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
+            .collect::<String>();
+        if slug.is_empty() {
+            slug = format!("post-{}-{}", now, idx);
+        }
+        let sort_order = item.sort_order.unwrap_or(idx as i64);
+        let excerpt = item
+            .excerpt
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| item.content.first().cloned().unwrap_or_default());
+        let content_json = match serde_json::to_string(&item.content) {
+            Ok(v) => v,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        if tx
+            .execute(
+                "INSERT INTO blog_posts (slug, title, date, tag, excerpt, content_json, sort_order, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    slug,
+                    item.title,
+                    item.date,
+                    item.tag,
+                    excerpt,
+                    content_json,
+                    sort_order,
+                    now
+                ],
+            )
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    }
+
+    if tx.commit().is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    StatusCode::OK
 }
 
 async fn visitor_visit(

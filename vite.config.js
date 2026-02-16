@@ -9,7 +9,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        donate: resolve(__dirname, "donate.html")
+        donate: resolve(__dirname, "donate.html"),
+        blog: resolve(__dirname, "blog.html")
       }
     }
   }
