@@ -26,6 +26,13 @@ const scheduleLoading = ref(false);
 const scheduleUpdatedAt = ref(0);
 const scheduleNextAt = ref(0);
 const scheduleCooldownMs = 5000;
+const blogList = ref([]);
+const blogError = ref(false);
+const blogUrl = "https://m.ratf.cn/blog";
+const blogLoading = ref(false);
+const blogUpdatedAt = ref(0);
+const blogNextAt = ref(0);
+const blogCooldownMs = 5000;
 const visitorCount = ref(0);
 const visitorToday = ref(0);
 const visitorMonth = ref(0);
@@ -82,10 +89,12 @@ onMounted(() => {
   fetchQuote();
   fetchStatus();
   fetchSchedule();
+  fetchBlog();
   initVisitorId();
   fetchVisitorStats();
   setInterval(fetchStatus, 60000);
   setInterval(fetchSchedule, 120000);
+  setInterval(fetchBlog, 180000);
   const savedTheme = localStorage.getItem("meow-theme");
   if (savedTheme) {
     isNight.value = savedTheme === "night";
@@ -125,6 +134,7 @@ const fetchQuote = () => {
 
 const canFetchStatus = () => Date.now() >= statusNextAt.value;
 const canFetchSchedule = () => Date.now() >= scheduleNextAt.value;
+const canFetchBlog = () => Date.now() >= blogNextAt.value;
 
 const fetchStatus = async () => {
   if (!canFetchStatus()) return;
@@ -163,6 +173,26 @@ const fetchSchedule = async () => {
     scheduleError.value = true;
   } finally {
     scheduleLoading.value = false;
+  }
+};
+
+const fetchBlog = async () => {
+  if (!canFetchBlog()) return;
+  blogNextAt.value = Date.now() + blogCooldownMs;
+  blogLoading.value = true;
+  try {
+    const res = await fetch(blogUrl);
+    if (!res.ok) throw new Error("blog fetch failed");
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      blogList.value = data;
+      blogError.value = false;
+      blogUpdatedAt.value = Date.now();
+    }
+  } catch {
+    blogError.value = true;
+  } finally {
+    blogLoading.value = false;
   }
 };
 
@@ -606,62 +636,53 @@ watch(isNight, () => {
         <section id="blog" class="mt-16">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <h2 class="font-display text-2xl">博客更新</h2>
-            <a
-              class="meow-pill motion-press"
-              :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
-              href="/blog.html"
-            >
-              查看全部
-            </a>
+            <div class="flex items-center gap-2">
+              <button
+                class="meow-pill motion-press px-2 py-0.5 text-[11px]"
+                type="button"
+                :class="[
+                  (!canFetchBlog() || blogLoading) ? 'opacity-50' : '',
+                  isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''
+                ]"
+                :disabled="blogLoading || !canFetchBlog()"
+                @click="fetchBlog()"
+              >
+                {{ blogLoading ? "刷新中" : (canFetchBlog() ? "刷新" : "冷却中") }}
+              </button>
+              <a
+                class="meow-pill motion-press"
+                :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
+                href="/blog.html"
+              >
+                查看全部
+              </a>
+            </div>
+          </div>
+          <div class="mt-2 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'" v-if="blogUpdatedAt">
+            更新于 {{ new Date(blogUpdatedAt).toLocaleTimeString("zh-CN") }}
+          </div>
+          <div class="mt-2 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'" v-if="blogError && blogList.length === 0">
+            暂时无法获取博客更新
+          </div>
+          <div class="mt-2 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'" v-else-if="!blogLoading && blogList.length === 0">
+            暂无博客内容
           </div>
           <div class="mt-6 grid gap-4 md:grid-cols-3">
             <article
+              v-for="(post, idx) in blogList.slice(0, 3)"
+              :key="post.slug"
               class="meow-card motion-card p-5"
-              style="--float-delay: 0.1s"
+              :style="{ '--float-delay': `${0.1 + idx * 0.25}s` }"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
-              <span class="meow-pill">日常</span>
-              <h3 class="mt-3 text-base font-600">博客开张：给自己留一个角落</h3>
+              <span class="meow-pill">{{ post.tag || "博客" }}</span>
+              <h3 class="mt-3 text-base font-600">{{ post.title }}</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                从这里开始记录，保持轻量更新，慢慢把每个阶段留住。
+                {{ post.excerpt || "暂无摘要" }}
               </p>
               <a
                 class="meow-pill motion-press mt-4 inline-flex"
-                href="/blog.html?post=welcome-to-blog"
-              >
-                阅读
-              </a>
-            </article>
-            <article
-              class="meow-card motion-card p-5"
-              style="--float-delay: 0.35s"
-              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
-            >
-              <span class="meow-pill">开发</span>
-              <h3 class="mt-3 text-base font-600">主页更新日志：视觉和结构的几次调整</h3>
-              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                记录设计思路和结构变化，方便后续继续迭代。
-              </p>
-              <a
-                class="meow-pill motion-press mt-4 inline-flex"
-                href="/blog.html?post=homepage-notes"
-              >
-                阅读
-              </a>
-            </article>
-            <article
-              class="meow-card motion-card p-5"
-              style="--float-delay: 0.6s"
-              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
-            >
-              <span class="meow-pill">碎碎念</span>
-              <h3 class="mt-3 text-base font-600">一些小事：奶茶、代码和慢慢来</h3>
-              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                生活和开发都在缓慢推进，先把步子迈稳。
-              </p>
-              <a
-                class="meow-pill motion-press mt-4 inline-flex"
-                href="/blog.html?post=small-things"
+                :href="`/blog.html?post=${encodeURIComponent(post.slug)}`"
               >
                 阅读
               </a>

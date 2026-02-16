@@ -1,0 +1,13 @@
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  transition: opacity 0.28s ease, transform 0.28s ease, filter 0.28s ease;
+}
+
+html.page-leave body {
+  opacity: 0;
+  transform: translateY(8px);
+  filter: blur(2px);
+}
