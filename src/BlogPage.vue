@@ -48,6 +48,8 @@ const posts = ref([]);
 const activePost = ref(null);
 
 const isListView = computed(() => !currentPost.value);
+const markdownImagePattern = /^!\[(.*?)\]\((.+?)\)$/;
+const imageExtPattern = /\.(png|jpe?g|gif|webp|avif|svg)(\?.*)?$/i;
 
 const formatDate = (dateStr) =>
   new Date(dateStr).toLocaleDateString("zh-CN", {
@@ -55,6 +57,55 @@ const formatDate = (dateStr) =>
     month: "2-digit",
     day: "2-digit"
   });
+
+const splitTags = (tagValue) => {
+  if (!tagValue || typeof tagValue !== "string") return [];
+  return tagValue
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const getPostTags = (post) => {
+  const tags = splitTags(post?.tag);
+  return tags.length ? tags : ["博客"];
+};
+
+const isLikelyImageUrl = (value) => {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return false;
+    return imageExtPattern.test(`${url.pathname}${url.search}`);
+  } catch {
+    return false;
+  }
+};
+
+const normalizeImageBlock = (url, alt, idx) => ({
+  type: "image",
+  key: `img-${idx}-${url}`,
+  url,
+  alt: alt?.trim() || "博客图片"
+});
+
+const activeContentBlocks = computed(() => {
+  const lines = Array.isArray(activePost.value?.content) ? activePost.value.content : [];
+  return lines
+    .map((raw, idx) => {
+      const text = String(raw || "").trim();
+      if (!text) return null;
+      const markdownMatched = text.match(markdownImagePattern);
+      if (markdownMatched) {
+        return normalizeImageBlock(markdownMatched[2], markdownMatched[1], idx);
+      }
+      if (isLikelyImageUrl(text)) {
+        return normalizeImageBlock(text, "", idx);
+      }
+      return { type: "text", key: `txt-${idx}`, text };
+    })
+    .filter(Boolean);
+});
 
 const readPostFromQuery = () => {
   const url = new URL(window.location.href);
@@ -207,7 +258,13 @@ onBeforeUnmount(() => {
           :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
         >
           <div class="flex flex-wrap items-center gap-2">
-            <span class="meow-pill">{{ post.tag }}</span>
+            <span
+              v-for="tag in getPostTags(post)"
+              :key="`${post.slug}-${tag}`"
+              class="meow-pill"
+            >
+              {{ tag }}
+            </span>
             <span class="text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">{{ formatDate(post.date) }}</span>
           </div>
           <h2 class="mt-3 font-display text-2xl">{{ post.title }}</h2>
@@ -239,7 +296,13 @@ onBeforeUnmount(() => {
           返回列表
         </button>
         <div class="mt-4 flex flex-wrap items-center gap-2">
-          <span class="meow-pill">{{ activePost.tag }}</span>
+          <span
+            v-for="tag in getPostTags(activePost)"
+            :key="`${activePost.slug}-${tag}`"
+            class="meow-pill"
+          >
+            {{ tag }}
+          </span>
           <span class="text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">{{ formatDate(activePost.date) }}</span>
         </div>
         <h2 class="mt-4 font-display text-3xl">{{ activePost.title }}</h2>
@@ -251,14 +314,32 @@ onBeforeUnmount(() => {
           >
             正在加载全文...
           </p>
-          <p
-            v-for="(paragraph, idx) in activePost.content"
-            :key="idx"
-            class="text-sm leading-relaxed"
-            :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
-          >
-            {{ paragraph }}
-          </p>
+          <template v-for="block in activeContentBlocks" :key="block.key">
+            <p
+              v-if="block.type === 'text'"
+              class="text-sm leading-relaxed"
+              :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
+            >
+              {{ block.text }}
+            </p>
+            <figure v-else class="blog-figure" :class="isNight ? 'blog-figure-night' : ''">
+              <img
+                :src="block.url"
+                :alt="block.alt"
+                loading="lazy"
+                decoding="async"
+                referrerpolicy="no-referrer"
+                class="blog-image"
+              />
+              <figcaption
+                v-if="block.alt && block.alt !== '博客图片'"
+                class="blog-caption"
+                :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
+              >
+                {{ block.alt }}
+              </figcaption>
+            </figure>
+          </template>
         </div>
       </section>
 
@@ -384,5 +465,33 @@ onBeforeUnmount(() => {
 
 .motion-press:active {
   transform: translateY(0);
+}
+
+.blog-figure {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid rgba(233, 217, 234, 0.9);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(47, 20, 47, 0.1);
+}
+
+.blog-figure-night {
+  border-color: rgba(74, 64, 110, 0.82);
+  background: rgba(35, 28, 58, 0.82);
+}
+
+.blog-image {
+  display: block;
+  width: 100%;
+  max-height: min(68vh, 560px);
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.blog-caption {
+  padding: 8px 12px 10px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

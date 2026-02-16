@@ -781,7 +781,7 @@ async fn blog_admin_page() -> impl IntoResponse {
             <button id="save">保存</button>
           </div>
           <div class="list" id="list"></div>
-          <div class="hint">提示：标题/日期必填。正文按段落输入，每行一段；Slug 可留空自动生成。</div>
+          <div class="hint">提示：标题/日期必填。标签可用逗号分隔（如：碎碎念,开发,偶然）；正文每行一段，图片可用 ![说明](图片URL) 或直接填图片 URL。</div>
           <div class="status" id="status"></div>
         </div>
       </div>
@@ -821,8 +821,8 @@ async fn blog_admin_page() -> impl IntoResponse {
               <input data-date placeholder="如：2026-02-16" value="${esc(item.date || "")}" />
             </div>
             <div>
-              <label>标签</label>
-              <input data-tag placeholder="如：日常" value="${esc(item.tag || "")}" />
+              <label>标签（逗号分隔）</label>
+              <input data-tag placeholder="如：碎碎念,开发,偶然" value="${esc(item.tag || "")}" />
             </div>
             <div>
               <label>排序</label>
@@ -835,7 +835,7 @@ async fn blog_admin_page() -> impl IntoResponse {
           </div>
           <div class="item-note">
             <label>正文（每行一段）</label>
-            <textarea data-content placeholder="第一段&#10;第二段">${esc((item.content || []).join("\n"))}</textarea>
+            <textarea data-content placeholder="第一段&#10;![配图说明](https://example.com/pic.jpg)&#10;或直接图片链接 https://example.com/pic.jpg">${esc((item.content || []).join("\n"))}</textarea>
           </div>
         `;
         wrap.querySelector("[data-remove]").addEventListener("click", () => {

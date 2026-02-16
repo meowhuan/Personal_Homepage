@@ -62,6 +62,13 @@ const statusSummaryClass = computed(() => {
   }
   return isNight.value ? "text-meow-night-soft" : "text-meow-soft";
 });
+const splitTags = (tagValue) => {
+  if (!tagValue || typeof tagValue !== "string") return [];
+  return tagValue
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
 
 const updateClock = () => {
   const now = new Date();
@@ -675,7 +682,15 @@ watch(isNight, () => {
               :style="{ '--float-delay': `${0.1 + idx * 0.25}s` }"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
-              <span class="meow-pill">{{ post.tag || "博客" }}</span>
+              <div class="flex flex-wrap gap-2">
+                <span
+                  v-for="tag in (splitTags(post.tag).length ? splitTags(post.tag) : ['博客'])"
+                  :key="`${post.slug}-${tag}`"
+                  class="meow-pill"
+                >
+                  {{ tag }}
+                </span>
+              </div>
               <h3 class="mt-3 text-base font-600">{{ post.title }}</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 {{ post.excerpt || "暂无摘要" }}
