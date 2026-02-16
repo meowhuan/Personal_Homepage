@@ -5,7 +5,9 @@ const time = ref("");
 const date = ref("");
 const calendar = ref({ day: "", month: "", weekday: "" });
 let timer = 0;
+let introTimer = 0;
 const isNight = ref(false);
+const showIntro = ref(true);
 const quoteText = ref("加载中…");
 const quoteFrom = ref("");
 const quoteError = ref(false);
@@ -110,10 +112,14 @@ onMounted(() => {
   }
   loadGiscus();
   recordVisitorVisit();
+  introTimer = window.setTimeout(() => {
+    showIntro.value = false;
+  }, 620);
 });
 
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer);
+  if (introTimer) window.clearTimeout(introTimer);
 });
 
 const canFetchQuote = () => Date.now() >= nextQuoteAt.value;
@@ -306,6 +312,20 @@ watch(isNight, () => {
       ? 'bg-gradient-to-br from-meow-night-bg via-[#201a3f] to-[#16162a] text-meow-night-ink meow-night'
       : 'bg-gradient-to-br from-meow-bg via-[#fff6fb] to-[#f2f0ff] text-meow-ink meow-day'"
   >
+    <Transition name="intro-fade">
+      <div
+        v-if="showIntro"
+        class="intro-loader"
+        :class="isNight ? 'intro-loader-night' : 'intro-loader-day'"
+        aria-hidden="true"
+      >
+        <div class="intro-loader-inner">
+          <span class="intro-dot"></span>
+          <span class="intro-dot"></span>
+          <span class="intro-dot"></span>
+        </div>
+      </div>
+    </Transition>
     <div class="relative overflow-hidden">
       <div
         class="pointer-events-none absolute -left-32 -top-24 h-80 w-80 rounded-[45%_55%_60%_40%/50%_60%_40%_50%] blur-3xl opacity-70 animate-floaty"
@@ -854,6 +874,17 @@ watch(isNight, () => {
 </template>
 
 <style>
+@keyframes introDotPulse {
+  0%, 100% {
+    opacity: 0.38;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.88;
+    transform: translateY(-2px);
+  }
+}
+
 @keyframes pageFade {
   0% {
     opacity: 0;
@@ -868,6 +899,69 @@ watch(isNight, () => {
 
 .page-fade {
   animation: pageFade 0.8s cubic-bezier(0.22, 1.2, 0.36, 1) both;
+}
+
+.intro-fade-enter-active,
+.intro-fade-leave-active {
+  transition: opacity 0.42s ease;
+}
+
+.intro-fade-enter-from,
+.intro-fade-leave-to {
+  opacity: 0;
+}
+
+.intro-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+}
+
+.intro-loader-day {
+  background: rgba(248, 243, 248, 0.72);
+}
+
+.intro-loader-night {
+  background: rgba(26, 26, 46, 0.72);
+}
+
+.intro-loader-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(233, 217, 234, 0.75);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.meow-night .intro-loader-inner {
+  border-color: rgba(74, 64, 110, 0.8);
+  background: rgba(35, 28, 58, 0.65);
+}
+
+.intro-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(126, 106, 134, 0.9);
+  animation: introDotPulse 1.1s ease-in-out infinite;
+}
+
+.meow-night .intro-dot {
+  background: rgba(184, 166, 216, 0.95);
+}
+
+.intro-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.intro-dot:nth-child(3) {
+  animation-delay: 0.32s;
 }
 
 .meow-bg {
@@ -1225,6 +1319,13 @@ watch(isNight, () => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .intro-loader,
+  .intro-loader-inner,
+  .intro-dot {
+    animation: none;
+    transition: none;
+  }
+
   .motion-card {
     animation: none;
   }

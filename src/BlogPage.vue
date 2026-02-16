@@ -46,6 +46,10 @@ const fallbackPosts = [
 const blogApiBase = "https://m.ratf.cn/blog";
 const posts = ref([]);
 const activePost = ref(null);
+const searchQuery = ref("");
+const selectedTags = ref([]);
+const tagMenuOpen = ref(false);
+const tagMenuRef = ref(null);
 
 const isListView = computed(() => !currentPost.value);
 const markdownImagePattern = /^!\[(.*?)\]\((.+?)\)$/;
@@ -69,6 +73,66 @@ const splitTags = (tagValue) => {
 const getPostTags = (post) => {
   const tags = splitTags(post?.tag);
   return tags.length ? tags : ["博客"];
+};
+
+const availableTags = computed(() => {
+  const allTags = posts.value.flatMap((post) => getPostTags(post));
+  return [...new Set(allTags)];
+});
+
+const normalizeForSearch = (value) => String(value || "").trim().toLowerCase();
+
+const matchesSearch = (post) => {
+  const keyword = normalizeForSearch(searchQuery.value);
+  if (!keyword) return true;
+  const haystack = [
+    post.title,
+    post.excerpt,
+    ...getPostTags(post)
+  ]
+    .map(normalizeForSearch)
+    .join(" ");
+  return haystack.includes(keyword);
+};
+
+const matchesTags = (post) => {
+  if (selectedTags.value.length === 0) return true;
+  const tags = getPostTags(post);
+  return selectedTags.value.some((tag) => tags.includes(tag));
+};
+
+const filteredPosts = computed(() =>
+  posts.value.filter((post) => matchesSearch(post) && matchesTags(post))
+);
+
+const toggleTagFilter = (tag) => {
+  if (selectedTags.value.includes(tag)) {
+    selectedTags.value = selectedTags.value.filter((item) => item !== tag);
+    return;
+  }
+  selectedTags.value = [...selectedTags.value, tag];
+};
+
+const clearTagFilters = () => {
+  selectedTags.value = [];
+};
+
+const clearFilters = () => {
+  searchQuery.value = "";
+  selectedTags.value = [];
+};
+
+const toggleTagMenu = () => {
+  tagMenuOpen.value = !tagMenuOpen.value;
+};
+
+const onDocumentClick = (event) => {
+  if (!tagMenuOpen.value) return;
+  const container = tagMenuRef.value;
+  if (!container) return;
+  if (!container.contains(event.target)) {
+    tagMenuOpen.value = false;
+  }
 };
 
 const isLikelyImageUrl = (value) => {
@@ -184,16 +248,18 @@ onMounted(() => {
   readPostFromQuery();
   fetchBlogList().then(() => fetchBlogDetail(currentPost.value));
   window.addEventListener("popstate", onPopState);
+  document.addEventListener("click", onDocumentClick);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("popstate", onPopState);
+  document.removeEventListener("click", onDocumentClick);
 });
 </script>
 
 <template>
   <div
-    class="min-h-screen font-body transition-colors duration-700 ease-in-out meow-bg"
+    class="min-h-screen font-body transition-colors duration-700 ease-in-out meow-bg page-fade"
     :class="isNight
       ? 'bg-gradient-to-br from-meow-night-bg via-[#201a3f] to-[#16162a] text-meow-night-ink meow-night'
       : 'bg-gradient-to-br from-meow-bg via-[#fff6fb] to-[#f2f0ff] text-meow-ink meow-day'"
@@ -219,6 +285,17 @@ onBeforeUnmount(() => {
           </p>
         </div>
         <div class="flex gap-2">
+          <Transition name="top-action-fade">
+            <button
+              v-if="!isListView"
+              type="button"
+              class="meow-btn-ghost"
+              :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+              @click="backToList"
+            >
+              返回博客列表
+            </button>
+          </Transition>
           <a
             href="/"
             class="meow-btn-ghost"
@@ -236,7 +313,109 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <section v-if="isListView" class="mt-8 grid gap-4">
+      <Transition name="blog-switch" mode="out-in">
+      <section v-if="isListView" class="mt-8 grid gap-4" key="blog-list">
+        <div
+          class="meow-card rounded-3xl p-4"
+          :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
+        >
+          <div class="grid gap-3 md:grid-cols-[1fr_auto] md:items-center">
+            <input
+              v-model.trim="searchQuery"
+              type="text"
+              placeholder="搜索文章（标题 / 摘要 / 标签）"
+              class="w-full rounded-2xl border px-4 py-2 text-sm outline-none transition-shadow"
+              :class="isNight
+                ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink placeholder:text-meow-night-soft/80 focus:shadow-[0_0_0_3px_rgba(136,243,255,0.18)]'
+                : 'border-meow-line bg-white/80 text-meow-ink placeholder:text-meow-soft focus:shadow-[0_0_0_3px_rgba(255,122,182,0.22)]'"
+            />
+            <div class="text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+              匹配 {{ filteredPosts.length }} / {{ posts.length }}
+            </div>
+          </div>
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <div class="relative" ref="tagMenuRef">
+              <button
+                type="button"
+                class="meow-pill motion-press"
+                :class="[
+                  selectedTags.length > 0
+                    ? (isNight ? 'border-meow-night-accent bg-meow-night-accent/15 text-meow-night-ink' : 'border-meow-accent bg-meow-accent/10 text-meow-ink')
+                    : (isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : '')
+                ]"
+                @click.stop="toggleTagMenu"
+              >
+                标签筛选 {{ selectedTags.length > 0 ? `(${selectedTags.length})` : "" }}
+              </button>
+              <Transition name="tag-pop">
+                <div
+                  v-if="tagMenuOpen"
+                  class="absolute left-0 top-[calc(100%+8px)] z-30 w-[min(78vw,460px)] rounded-2xl border p-3 shadow-[0_14px_30px_rgba(47,20,47,0.12)]"
+                  :class="isNight ? 'border-meow-night-line bg-meow-night-card/95' : 'border-meow-line bg-white/95'"
+                  @click.stop
+                >
+                  <div class="max-h-44 overflow-y-auto pr-1">
+                    <div class="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="meow-pill motion-press"
+                        :class="[
+                          selectedTags.length === 0
+                            ? (isNight ? 'border-meow-night-accent bg-meow-night-accent/15 text-meow-night-ink' : 'border-meow-accent bg-meow-accent/10 text-meow-ink')
+                            : (isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : '')
+                        ]"
+                        @click="clearTagFilters"
+                      >
+                        全部标签
+                      </button>
+                      <button
+                        v-for="tag in availableTags"
+                        :key="`filter-${tag}`"
+                        type="button"
+                        class="meow-pill motion-press"
+                        :class="[
+                          selectedTags.includes(tag)
+                            ? (isNight ? 'border-meow-night-accent bg-meow-night-accent/15 text-meow-night-ink' : 'border-meow-accent bg-meow-accent/10 text-meow-ink')
+                            : (isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : '')
+                        ]"
+                        @click="toggleTagFilter(tag)"
+                      >
+                        #{{ tag }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="mt-3 flex items-center justify-between gap-2">
+                    <span class="text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                      {{ selectedTags.length > 0 ? `已选 ${selectedTags.length} 个标签` : "当前：全部标签" }}
+                    </span>
+                    <button
+                      v-if="selectedTags.length > 0"
+                      type="button"
+                      class="meow-pill motion-press"
+                      :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : ''"
+                      @click="clearTagFilters"
+                    >
+                      清空标签
+                    </button>
+                  </div>
+                </div>
+              </Transition>
+            </div>
+            <span class="text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+              {{ selectedTags.length > 0 ? selectedTags.join(" / ") : "全部标签" }}
+            </span>
+            <button
+              v-if="searchQuery || selectedTags.length > 0"
+              type="button"
+              class="meow-pill motion-press"
+              :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : ''"
+              @click="clearFilters"
+            >
+              清除筛选
+            </button>
+          </div>
+        </div>
+
         <div
           v-if="blogLoading"
           class="text-sm"
@@ -252,9 +431,10 @@ onBeforeUnmount(() => {
           后端暂不可用，已显示本地缓存内容。
         </div>
         <article
-          v-for="post in posts"
+          v-for="(post, index) in filteredPosts"
           :key="post.slug"
-          class="meow-card motion-card rounded-3xl p-5"
+          class="meow-card motion-card rounded-3xl p-5 blog-reveal"
+          :style="{ '--reveal-delay': `${index * 90}ms` }"
           :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
         >
           <div class="flex flex-wrap items-center gap-2">
@@ -280,21 +460,21 @@ onBeforeUnmount(() => {
             阅读全文
           </button>
         </article>
+        <div
+          v-if="!blogLoading && filteredPosts.length === 0"
+          class="meow-card rounded-3xl p-5 text-sm"
+          :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
+        >
+          没有符合条件的文章，试试更短的关键词或清除标签筛选。
+        </div>
       </section>
 
       <section
         v-else-if="activePost"
+        key="blog-detail"
         class="meow-card mt-8 rounded-3xl p-6"
         :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
       >
-        <button
-          class="meow-btn-ghost"
-          :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-bg/80' : ''"
-          type="button"
-          @click="backToList"
-        >
-          返回列表
-        </button>
         <div class="mt-4 flex flex-wrap items-center gap-2">
           <span
             v-for="tag in getPostTags(activePost)"
@@ -314,15 +494,21 @@ onBeforeUnmount(() => {
           >
             正在加载全文...
           </p>
-          <template v-for="block in activeContentBlocks" :key="block.key">
+          <template v-for="(block, idx) in activeContentBlocks" :key="block.key">
             <p
               v-if="block.type === 'text'"
-              class="text-sm leading-relaxed"
+              class="text-sm leading-relaxed blog-content-item"
+              :style="{ '--content-delay': `${idx * 70}ms` }"
               :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
             >
               {{ block.text }}
             </p>
-            <figure v-else class="blog-figure" :class="isNight ? 'blog-figure-night' : ''">
+            <figure
+              v-else
+              class="blog-figure blog-content-item"
+              :style="{ '--content-delay': `${idx * 70}ms` }"
+              :class="isNight ? 'blog-figure-night' : ''"
+            >
               <img
                 :src="block.url"
                 :alt="block.alt"
@@ -345,16 +531,31 @@ onBeforeUnmount(() => {
 
       <section
         v-else
+        key="blog-not-found"
         class="meow-card mt-8 rounded-3xl p-6 text-sm"
         :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
       >
         没有找到这篇文章，返回列表看看其他内容吧。
       </section>
+      </Transition>
     </main>
   </div>
 </template>
 
 <style>
+.page-fade {
+  animation: pageFade 0.72s cubic-bezier(0.22, 1.2, 0.36, 1) both;
+}
+
+@keyframes pageFade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
 .meow-bg {
   position: relative;
 }
@@ -467,6 +668,67 @@ onBeforeUnmount(() => {
   transform: translateY(0);
 }
 
+.blog-switch-enter-active,
+.blog-switch-leave-active {
+  transition: opacity 0.32s ease, transform 0.32s ease;
+}
+
+.blog-switch-enter-from,
+.blog-switch-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.top-action-fade-enter-active,
+.top-action-fade-leave-active {
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+
+.top-action-fade-enter-from,
+.top-action-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+}
+
+.tag-pop-enter-active,
+.tag-pop-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.tag-pop-enter-from,
+.tag-pop-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+}
+
+.blog-reveal {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: blogReveal 0.46s ease forwards;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+@keyframes blogReveal {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.blog-content-item {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: blogContentIn 0.38s ease forwards;
+  animation-delay: var(--content-delay, 0ms);
+}
+
+@keyframes blogContentIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .blog-figure {
   margin: 0;
   overflow: hidden;
@@ -487,6 +749,12 @@ onBeforeUnmount(() => {
   max-height: min(68vh, 560px);
   object-fit: contain;
   background: rgba(255, 255, 255, 0.45);
+  transition: transform 0.45s ease, filter 0.45s ease;
+}
+
+.blog-figure:hover .blog-image {
+  transform: scale(1.015);
+  filter: saturate(1.04);
 }
 
 .blog-caption {
