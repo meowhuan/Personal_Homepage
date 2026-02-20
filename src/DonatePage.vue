@@ -1,7 +1,13 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 const isNight = ref(false);
+const themeMedia = ref(null);
+
+const onSystemThemeChange = (event) => {
+  if (localStorage.getItem("meow-theme")) return;
+  isNight.value = event.matches;
+};
 
 onMounted(() => {
   const savedTheme = localStorage.getItem("meow-theme");
@@ -10,7 +16,16 @@ onMounted(() => {
     return;
   }
   if (window.matchMedia) {
-    isNight.value = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    isNight.value = media.matches;
+    themeMedia.value = media;
+    media.addEventListener("change", onSystemThemeChange);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
   }
 });
 

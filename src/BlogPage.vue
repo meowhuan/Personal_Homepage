@@ -50,6 +50,7 @@ const searchQuery = ref("");
 const selectedTags = ref([]);
 const tagMenuOpen = ref(false);
 const tagMenuRef = ref(null);
+const themeMedia = ref(null);
 
 const isListView = computed(() => !currentPost.value);
 const markdownImagePattern = /^!\[(.*?)\]\((.+?)\)$/;
@@ -196,6 +197,15 @@ const backToList = () => {
 const toggleTheme = () => {
   isNight.value = !isNight.value;
   localStorage.setItem("meow-theme", isNight.value ? "night" : "day");
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
+    themeMedia.value = null;
+  }
+};
+
+const onSystemThemeChange = (event) => {
+  if (localStorage.getItem("meow-theme")) return;
+  isNight.value = event.matches;
 };
 
 const fetchBlogList = async () => {
@@ -243,7 +253,10 @@ onMounted(() => {
   if (savedTheme) {
     isNight.value = savedTheme === "night";
   } else if (window.matchMedia) {
-    isNight.value = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    isNight.value = media.matches;
+    themeMedia.value = media;
+    media.addEventListener("change", onSystemThemeChange);
   }
   readPostFromQuery();
   fetchBlogList().then(() => fetchBlogDetail(currentPost.value));
@@ -254,6 +267,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("popstate", onPopState);
   document.removeEventListener("click", onDocumentClick);
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
+  }
 });
 </script>
 

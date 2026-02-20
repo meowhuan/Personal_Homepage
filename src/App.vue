@@ -46,6 +46,7 @@ const visitorCooldownMs = 5000;
 const visitorUrl = "https://m.ratf.cn/visitor";
 const visitorVisitUrl = "https://m.ratf.cn/visitor/visit";
 const visitorIdKey = "meow-visitor-id";
+const themeMedia = ref(null);
 const hasOnlineDevice = computed(() =>
   statusList.value.some((item) => item?.online)
 );
@@ -108,7 +109,10 @@ onMounted(() => {
   if (savedTheme) {
     isNight.value = savedTheme === "night";
   } else if (window.matchMedia) {
-    isNight.value = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    isNight.value = media.matches;
+    themeMedia.value = media;
+    media.addEventListener("change", onSystemThemeChange);
   }
   loadGiscus();
   recordVisitorVisit();
@@ -120,6 +124,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer);
   if (introTimer) window.clearTimeout(introTimer);
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
+  }
 });
 
 const canFetchQuote = () => Date.now() >= nextQuoteAt.value;
@@ -212,6 +219,15 @@ const fetchBlog = async () => {
 const toggleTheme = () => {
   isNight.value = !isNight.value;
   localStorage.setItem("meow-theme", isNight.value ? "night" : "day");
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
+    themeMedia.value = null;
+  }
+};
+
+const onSystemThemeChange = (event) => {
+  if (localStorage.getItem("meow-theme")) return;
+  isNight.value = event.matches;
 };
 
 const initVisitorId = () => {
