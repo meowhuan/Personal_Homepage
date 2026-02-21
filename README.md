@@ -8,10 +8,10 @@ This repo contains a personal homepage and an online status system (backend + cl
 
 - `src/`：个人主页（Vite + Vue3 + UnoCSS）
 - `status-backend/`：在线状态后端（Rust + SQLite）
-- `status-client-rust/`：Windows / Linux 客户端（静默心跳）[^1]
+- `status-client-rust/`：Windows / Linux 客户端（静默心跳)
 - `status-client-android/`：Android 方案（AutoX.js / Magisk shell）
 
-- [^1] 注：Linux客户端并未进行测试，目前能够完成使用的仅Windows客户端，Linux可用性待取证
+- 注：Linux客户端并未进行测试，目前能够完成使用的仅Windows客户端，Linux可用性待取证
 
 ## 快速开始 / Quick Start
 
