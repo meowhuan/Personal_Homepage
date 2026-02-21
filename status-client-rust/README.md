@@ -51,9 +51,17 @@ cargo deb
 
 - 该客户端为后台静默运行（无 UI、无托盘）。
 - 可配置为开机自启或作为服务运行。
+- 心跳会附带听歌状态：
+  - Windows：SMTC（系统媒体会话）
+  - Linux：MPRIS（依赖 `playerctl`）
+  - 网易云：需安装[BetterNCM](https://github.com/std-microblock/chromatic)框架后安装[InfLink-rs](https://github.com/apoint123/inflink-rs)插件进行SMTC支持
 
 This client runs silently in the background (no UI, no tray).
 You can set it to auto-start or run as a service.
+Heartbeat also includes music status:
+- Windows: SMTC
+- Linux: MPRIS (`playerctl` required)
+- NetEase Cloud: SMTC support requires installing the [InfLink-rs](https://github.com/apoint123/inflink-rs) plugin after installing the [BetterNCM](https://github.com/std-microblock/chromatic) framework.
 
 ## 开机自启 / Auto-start
 

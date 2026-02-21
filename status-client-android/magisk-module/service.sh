@@ -12,6 +12,9 @@ DEVICE_ID="$(getprop ro.product.device)"
 DEVICE_NAME="$(getprop ro.product.model)"
 HEARTBEAT_INTERVAL=60
 OFFLINE_DELAY=300
+ENABLE_MUSIC_NOTIFICATION=1
+MUSIC_PACKAGE="com.netease.cloudmusic"
+MUSIC_SOURCE="netease-cloudmusic"
 
 if [ -f "$CONFIG" ]; then
   . "$CONFIG"
@@ -19,10 +22,69 @@ fi
 
 last_off=0
 
+json_escape() {
+  echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+extract_music_from_notification() {
+  music_playing=false
+  music_title=""
+  music_artist=""
+  music_source="$MUSIC_SOURCE"
+
+  [ "$ENABLE_MUSIC_NOTIFICATION" = "1" ] || return 0
+
+  dump="$(dumpsys notification --noredact 2>/dev/null)"
+  [ -n "$dump" ] || return 0
+
+  block="$(echo "$dump" | awk -v pkg="$MUSIC_PACKAGE" '
+    index($0, pkg) { in_pkg=1 }
+    in_pkg { print }
+    in_pkg && /^ *mSnoozeHelper:/ { exit }
+  ')"
+  [ -n "$block" ] || return 0
+
+  music_title="$(echo "$block" | sed -n 's/.*android.title=\(.*\)$/\1/p' | head -n1 | tr -d '\r')"
+  music_artist="$(echo "$block" | sed -n 's/.*android.subText=\(.*\)$/\1/p' | head -n1 | tr -d '\r')"
+  if [ -z "$music_artist" ]; then
+    music_artist="$(echo "$block" | sed -n 's/.*android.text=\(.*\)$/\1/p' | head -n1 | tr -d '\r')"
+  fi
+
+  # 兼容 “歌名 - 歌手” 这种通知格式
+  if [ -n "$music_title" ] && [ -z "$music_artist" ] && echo "$music_title" | grep -q " - "; then
+    music_artist="${music_title#* - }"
+    music_title="${music_title%% - *}"
+  fi
+
+  [ -n "$music_title" ] || [ -n "$music_artist" ] || return 0
+  music_playing=true
+}
+
 post_json() {
   local online="$1"
   local idle="$2"
-  local payload="{\"device_id\":\"$DEVICE_ID\",\"device_name\":\"$DEVICE_NAME\",\"online\":$online,\"idle_seconds\":$idle}"
+  extract_music_from_notification
+
+  local esc_device_id esc_device_name esc_music_source esc_music_title esc_music_artist
+  esc_device_id="$(json_escape "$DEVICE_ID")"
+  esc_device_name="$(json_escape "$DEVICE_NAME")"
+  esc_music_source="$(json_escape "$music_source")"
+  esc_music_title="$(json_escape "$music_title")"
+  esc_music_artist="$(json_escape "$music_artist")"
+
+  local title_json artist_json
+  if [ -n "$music_title" ]; then
+    title_json="\"$esc_music_title\""
+  else
+    title_json="null"
+  fi
+  if [ -n "$music_artist" ]; then
+    artist_json="\"$esc_music_artist\""
+  else
+    artist_json="null"
+  fi
+
+  local payload="{\"device_id\":\"$esc_device_id\",\"device_name\":\"$esc_device_name\",\"online\":$online,\"idle_seconds\":$idle,\"music_playing\":$music_playing,\"music_title\":$title_json,\"music_artist\":$artist_json,\"music_source\":\"$esc_music_source\"}"
   if command -v curl >/dev/null 2>&1; then
     curl -s -m 5 -H "x-token: $TOKEN" -H "Content-Type: application/json" -d "$payload" "$ENDPOINT" >/dev/null 2>&1
   elif command -v wget >/dev/null 2>&1; then

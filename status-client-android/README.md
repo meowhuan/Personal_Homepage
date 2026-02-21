@@ -27,6 +27,8 @@ Android offers two approaches:
 - 60s 心跳 / heartbeat
 - 锁屏 5 分钟离线 / offline after 5 min screen-off
 - 前台保活（尽力）/ best-effort keep-alive
+- 尝试从通知读取网易云音乐当前歌曲（需通知读取权限）
+  / Try to read current Netease song from notifications (notification access required)
 
 ## 方案 B：Magisk Shell 守护（root）
 
@@ -53,9 +55,18 @@ OFFLINE_DELAY=300
 
 - 60s 心跳 / heartbeat
 - 锁屏 5 分钟离线（通过 `dumpsys power/display`）
+- 尝试通过通知读取网易云当前歌曲并上报（root + `dumpsys notification --noredact`）
 - 断网/关机交由后端超时处理
 
 Offline/Power-off is handled by backend timeout.
+
+可选配置（`config.env`）/ Optional config:
+
+```
+ENABLE_MUSIC_NOTIFICATION=1
+MUSIC_PACKAGE="com.netease.cloudmusic"
+MUSIC_SOURCE="netease-cloudmusic"
+```
 
 ## 打包模块 / Pack Module
 

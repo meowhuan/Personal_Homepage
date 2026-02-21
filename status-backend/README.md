@@ -10,6 +10,7 @@ Rust + SQLite online status backend.
 - 设备删除（鉴权）/ Delete device with token
 - 全局手动离线开关（开启后心跳静默）/ Global manual-offline switch (heartbeat muted when enabled)
 - 设备手动离线状态 / Per-device manual offline status
+- 听歌状态字段（是否在听、歌曲名、作者、来源）/ Music status fields (playing/title/artist/source)
 
 ## 运行 / Run
 

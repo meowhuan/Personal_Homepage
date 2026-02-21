@@ -8,11 +8,16 @@ const ENDPOINT = "http://you-host:7999/heartbeat";
 const TOKEN = "your_token";
 const DEVICE_ID = "android-phone";
 const DEVICE_NAME = "Android";
+const MUSIC_SOURCE = "netease-cloudmusic";
 
 // 60s 心跳
 const HEARTBEAT_INTERVAL_MS = 60 * 1000;
 // 锁屏 5 分钟后上报离线
 const OFFLINE_DELAY_MS = 5 * 60 * 1000;
+// 通知抓取音乐状态（需要通知读取权限）
+const ENABLE_MUSIC_NOTIFICATION = true;
+const MUSIC_APP_PACKAGE = "com.netease.cloudmusic";
+const MUSIC_STALE_MS = 3 * 60 * 1000;
 
 // ======= 前台保活 =======
 try {
@@ -30,18 +35,120 @@ try {
 
 // ======= 状态 =======
 let screenOffTimer = null;
+let musicState = {
+  playing: false,
+  title: null,
+  artist: null,
+  source: MUSIC_SOURCE,
+  updatedAt: 0
+};
+
+function cleanText(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  return s.length > 0 ? s : null;
+}
+
+function updateMusicState(title, artist) {
+  const cleanTitle = cleanText(title);
+  const cleanArtist = cleanText(artist);
+  musicState = {
+    playing: !!(cleanTitle || cleanArtist),
+    title: cleanTitle,
+    artist: cleanArtist,
+    source: MUSIC_SOURCE,
+    updatedAt: Date.now()
+  };
+}
+
+function clearMusicState() {
+  musicState = {
+    playing: false,
+    title: null,
+    artist: null,
+    source: MUSIC_SOURCE,
+    updatedAt: Date.now()
+  };
+}
+
+function readMusicSnapshot() {
+  const fresh = Date.now() - musicState.updatedAt <= MUSIC_STALE_MS;
+  if (!fresh) {
+    return {
+      playing: false,
+      title: null,
+      artist: null,
+      source: MUSIC_SOURCE
+    };
+  }
+  return {
+    playing: musicState.playing,
+    title: musicState.title,
+    artist: musicState.artist,
+    source: musicState.source || MUSIC_SOURCE
+  };
+}
+
+function parseNeteaseNotification(notification) {
+  const title = cleanText(notification.getTitle && notification.getTitle());
+  const text = cleanText(notification.getText && notification.getText());
+  const subText = cleanText(notification.getSubText && notification.getSubText());
+  if (!title && !text && !subText) return;
+
+  let songTitle = title;
+  let songArtist = subText || null;
+  if (!songArtist && text) {
+    songArtist = text;
+  }
+
+  if (songTitle && songTitle.includes(" - ")) {
+    const pair = songTitle.split(" - ");
+    songTitle = cleanText(pair[0]);
+    songArtist = cleanText(pair.slice(1).join(" - ")) || songArtist;
+  }
+  if ((!songTitle || !songArtist) && text && text.includes(" - ")) {
+    const pair = text.split(" - ");
+    songTitle = songTitle || cleanText(pair[0]);
+    songArtist = songArtist || cleanText(pair.slice(1).join(" - "));
+  }
+
+  updateMusicState(songTitle, songArtist);
+}
 
 // ======= 心跳上报 =======
 function sendHeartbeat(online, idleSeconds) {
+  const music = readMusicSnapshot();
   const payload = {
     device_id: DEVICE_ID,
     device_name: DEVICE_NAME,
     online: online,
-    idle_seconds: idleSeconds || 0
+    idle_seconds: idleSeconds || 0,
+    music_playing: music.playing,
+    music_title: music.title,
+    music_artist: music.artist,
+    music_source: music.source
   };
   try {
     http.postJson(ENDPOINT, payload, {
       headers: { "x-token": TOKEN }
+    });
+  } catch (e) {
+    // ignore
+  }
+}
+
+// ======= 音乐通知监听 =======
+if (ENABLE_MUSIC_NOTIFICATION) {
+  try {
+    events.observeNotification();
+    events.on("notification", (notification) => {
+      try {
+        const pkg = notification.getPackageName && notification.getPackageName();
+        if (pkg !== MUSIC_APP_PACKAGE) return;
+        parseNeteaseNotification(notification);
+      } catch (e) {
+        // ignore
+      }
     });
   } catch (e) {
     // ignore
@@ -72,4 +179,5 @@ setInterval(() => {
 }, HEARTBEAT_INTERVAL_MS);
 
 // 启动时立即上报一次
+clearMusicState();
 sendHeartbeat(true, 0);

@@ -255,9 +255,19 @@ const {
                 <div
                   v-for="item in statusList.slice(0, 3)"
                   :key="item.device_id"
-                  class="flex items-center justify-between gap-2"
+                  class="flex items-start justify-between gap-2"
                 >
-                  <span class="truncate">{{ item.device_name }}</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate">{{ item.device_name }}</div>
+                    <div
+                      v-if="item.online && item.music_playing && (item.music_title || item.music_artist)"
+                      class="mt-0.5 truncate text-[10px]"
+                      :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
+                    >
+                      🎵 {{ item.music_title || "未知歌曲" }}
+                      <span v-if="item.music_artist"> · {{ item.music_artist }}</span>
+                    </div>
+                  </div>
                   <span
                     class="text-[11px]"
                     :class="item.online ? (isNight ? 'text-meow-night-accent' : 'text-meow-accent') : (isNight ? 'text-meow-night-soft' : 'text-meow-soft')"

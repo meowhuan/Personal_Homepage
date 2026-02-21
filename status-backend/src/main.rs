@@ -29,6 +29,10 @@ struct Heartbeat {
     device_name: String,
     online: bool,
     idle_seconds: Option<u64>,
+    music_playing: Option<bool>,
+    music_title: Option<String>,
+    music_artist: Option<String>,
+    music_source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -40,6 +44,11 @@ struct DeviceStatus {
     idle_seconds: Option<u64>,
     manual_offline: bool,
     global_manual_offline: bool,
+    music_playing: bool,
+    music_title: Option<String>,
+    music_artist: Option<String>,
+    music_source: Option<String>,
+    music_updated_at: Option<i64>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -92,6 +101,10 @@ struct DeviceStatusUpdatePayload {
     device_name: Option<String>,
     online: Option<bool>,
     manual_offline: Option<bool>,
+    music_playing: Option<bool>,
+    music_title: Option<String>,
+    music_artist: Option<String>,
+    music_source: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -161,7 +174,12 @@ async fn main() {
             device_name TEXT NOT NULL,
             online INTEGER NOT NULL,
             last_seen INTEGER NOT NULL,
-            idle_seconds INTEGER
+            idle_seconds INTEGER,
+            music_playing INTEGER NOT NULL DEFAULT 0,
+            music_title TEXT,
+            music_artist TEXT,
+            music_source TEXT,
+            music_updated_at INTEGER
         );
         CREATE TABLE IF NOT EXISTS status_control (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -200,6 +218,14 @@ async fn main() {
         "ALTER TABLE device_status ADD COLUMN manual_offline INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE device_status ADD COLUMN music_playing INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_title TEXT", []);
+    let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_artist TEXT", []);
+    let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_source TEXT", []);
+    let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_updated_at INTEGER", []);
     let _ = conn.execute(
         "INSERT INTO status_control (id, global_manual_offline, updated_at)
          VALUES (1, 0, ?1)
@@ -261,20 +287,40 @@ async fn heartbeat(
         return StatusCode::OK;
     }
     let now = now_ts();
+    let music_playing = payload.music_playing.unwrap_or(false);
+    let music_title = payload.music_title;
+    let music_artist = payload.music_artist;
+    let music_source = payload.music_source;
     let _ = conn.execute(
-        "INSERT INTO device_status (device_id, device_name, online, last_seen, idle_seconds, manual_offline)
-         VALUES (?1, ?2, ?3, ?4, ?5, COALESCE((SELECT manual_offline FROM device_status WHERE device_id = ?1), 0))
+        "INSERT INTO device_status (
+            device_id, device_name, online, last_seen, idle_seconds, manual_offline,
+            music_playing, music_title, music_artist, music_source, music_updated_at
+         )
+         VALUES (
+            ?1, ?2, ?3, ?4, ?5, COALESCE((SELECT manual_offline FROM device_status WHERE device_id = ?1), 0),
+            ?6, ?7, ?8, ?9, ?10
+         )
          ON CONFLICT(device_id) DO UPDATE SET
            device_name=excluded.device_name,
            online=excluded.online,
            last_seen=excluded.last_seen,
-           idle_seconds=excluded.idle_seconds;",
+           idle_seconds=excluded.idle_seconds,
+           music_playing=excluded.music_playing,
+           music_title=excluded.music_title,
+           music_artist=excluded.music_artist,
+           music_source=excluded.music_source,
+           music_updated_at=excluded.music_updated_at;",
         params![
             payload.device_id,
             payload.device_name,
             payload.online as i32,
             now,
             payload.idle_seconds.map(|v| v as i64),
+            music_playing as i32,
+            music_title,
+            music_artist,
+            music_source,
+            now,
         ],
     );
 
@@ -287,7 +333,8 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
     let global_manual_offline = is_global_manual_offline(&conn);
     let mut stmt = conn
         .prepare(
-            "SELECT device_id, device_name, online, last_seen, idle_seconds, manual_offline
+            "SELECT device_id, device_name, online, last_seen, idle_seconds, manual_offline,
+                    music_playing, music_title, music_artist, music_source, music_updated_at
              FROM device_status
              ORDER BY device_id ASC",
         )
@@ -298,6 +345,7 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
             let last_seen: i64 = row.get(3)?;
             let online_flag: i32 = row.get(2)?;
             let manual_offline: i32 = row.get(5)?;
+            let music_playing: i32 = row.get(6)?;
             let stale = now.saturating_sub(last_seen) > 300;
             let device_manual_offline = manual_offline == 1;
             let online =
@@ -310,6 +358,11 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
                 idle_seconds: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 manual_offline: device_manual_offline,
                 global_manual_offline,
+                music_playing: music_playing == 1,
+                music_title: row.get(7)?,
+                music_artist: row.get(8)?,
+                music_source: row.get(9)?,
+                music_updated_at: row.get(10)?,
             })
         })
         .unwrap();
@@ -496,7 +549,8 @@ async fn device_status_update(
     let conn = state.db.lock().unwrap();
     let existing = conn
         .query_row(
-            "SELECT device_name, online, last_seen, idle_seconds, manual_offline
+            "SELECT device_name, online, last_seen, idle_seconds, manual_offline,
+                    music_playing, music_title, music_artist, music_source, music_updated_at
              FROM device_status
              WHERE device_id = ?1",
             params![payload.device_id.as_str()],
@@ -507,6 +561,11 @@ async fn device_status_update(
                     row.get::<_, i64>(2)?,
                     row.get::<_, Option<i64>>(3)?,
                     row.get::<_, i32>(4)?,
+                    row.get::<_, i32>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
                 ))
             },
         )
@@ -532,17 +591,46 @@ async fn device_status_update(
     let manual_offline = payload
         .manual_offline
         .unwrap_or_else(|| existing.as_ref().map(|v| v.4 == 1).unwrap_or(false));
+    let has_music_update = payload.music_playing.is_some()
+        || payload.music_title.is_some()
+        || payload.music_artist.is_some()
+        || payload.music_source.is_some();
+    let music_playing = payload
+        .music_playing
+        .unwrap_or_else(|| existing.as_ref().map(|v| v.5 == 1).unwrap_or(false));
+    let music_title = payload
+        .music_title
+        .or_else(|| existing.as_ref().and_then(|v| v.6.clone()));
+    let music_artist = payload
+        .music_artist
+        .or_else(|| existing.as_ref().and_then(|v| v.7.clone()));
+    let music_source = payload
+        .music_source
+        .or_else(|| existing.as_ref().and_then(|v| v.8.clone()));
+    let music_updated_at = if has_music_update {
+        Some(now)
+    } else {
+        existing.as_ref().and_then(|v| v.9)
+    };
 
     if conn
         .execute(
-            "INSERT INTO device_status (device_id, device_name, online, last_seen, idle_seconds, manual_offline)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO device_status (
+                device_id, device_name, online, last_seen, idle_seconds, manual_offline,
+                music_playing, music_title, music_artist, music_source, music_updated_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(device_id) DO UPDATE SET
                device_name = excluded.device_name,
                online = excluded.online,
                last_seen = excluded.last_seen,
                idle_seconds = excluded.idle_seconds,
-               manual_offline = excluded.manual_offline",
+               manual_offline = excluded.manual_offline,
+               music_playing = excluded.music_playing,
+               music_title = excluded.music_title,
+               music_artist = excluded.music_artist,
+               music_source = excluded.music_source,
+               music_updated_at = excluded.music_updated_at",
             params![
                 payload.device_id,
                 device_name,
@@ -550,6 +638,11 @@ async fn device_status_update(
                 last_seen,
                 idle_seconds,
                 manual_offline as i32,
+                music_playing as i32,
+                music_title,
+                music_artist,
+                music_source,
+                music_updated_at,
             ],
         )
         .is_err()

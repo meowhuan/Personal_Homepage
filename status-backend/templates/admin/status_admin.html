@@ -122,6 +122,7 @@
                   <th>设备 ID</th>
                   <th>设备名</th>
                   <th>当前状态</th>
+                  <th>听歌</th>
                   <th>手动离线</th>
                   <th>操作</th>
                 </tr>
@@ -159,12 +160,16 @@
         }
         emptyEl.style.display = "none";
         items.forEach((item) => {
+          const musicLine = item.music_playing
+            ? `${item.music_title || "未知歌曲"}${item.music_artist ? ` - ${item.music_artist}` : ""}`
+            : "-";
           const tr = document.createElement("tr");
           tr.dataset.id = item.device_id;
           tr.innerHTML = `
             <td>${item.device_id || ""}</td>
             <td>${item.device_name || ""}</td>
             <td class="${item.online ? "online" : "offline"}">${item.online ? "在线" : "离线"}</td>
+            <td>${musicLine}</td>
             <td><input data-manual type="checkbox" style="width:auto;" ${item.manual_offline ? "checked" : ""} /></td>
             <td><button class="small-btn" data-save>保存</button></td>
           `;

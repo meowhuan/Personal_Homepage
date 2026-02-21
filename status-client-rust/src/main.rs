@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::PathBuf,
+    process::Command,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -17,6 +18,18 @@ struct Heartbeat {
     device_name: String,
     online: bool,
     idle_seconds: Option<u64>,
+    music_playing: bool,
+    music_title: Option<String>,
+    music_artist: Option<String>,
+    music_source: Option<String>,
+}
+
+#[derive(Default)]
+struct MusicState {
+    playing: bool,
+    title: Option<String>,
+    artist: Option<String>,
+    source: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -68,7 +81,18 @@ fn heartbeat_loop(cfg: Config, status: Arc<Mutex<String>>) {
             device_name: cfg.device_name.clone(),
             online,
             idle_seconds: idle,
+            music_playing: false,
+            music_title: None,
+            music_artist: None,
+            music_source: None,
         };
+        let mut payload = payload;
+        if let Some(music) = current_music() {
+            payload.music_playing = music.playing;
+            payload.music_title = music.title;
+            payload.music_artist = music.artist;
+            payload.music_source = music.source;
+        }
 
         let res = client
             .post(&cfg.endpoint)
@@ -189,6 +213,111 @@ fn resolve_path(p: &str) -> PathBuf {
         }
     }
     path
+}
+
+fn clean_text(s: Option<&str>) -> Option<String> {
+    s.map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+}
+
+#[cfg(windows)]
+fn current_music() -> Option<MusicState> {
+    let script = r#"
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+$req = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()
+while ($req.Status -eq 0) { Start-Sleep -Milliseconds 12 }
+if ($req.Status -ne 1) { return }
+$manager = $req.GetResults()
+$session = $manager.GetCurrentSession()
+if ($null -eq $session) { return }
+$mediaReq = $session.TryGetMediaPropertiesAsync()
+while ($mediaReq.Status -eq 0) { Start-Sleep -Milliseconds 12 }
+if ($mediaReq.Status -ne 1) { return }
+$media = $mediaReq.GetResults()
+$playback = $session.GetPlaybackInfo()
+$status = [string]$playback.PlaybackStatus
+[pscustomobject]@{
+  playing = ($status -eq 'Playing')
+  title = [string]$media.Title
+  artist = [string]$media.Artist
+  source = [string]$session.SourceAppUserModelId
+} | ConvertTo-Json -Compress
+"#;
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let title = clean_text(value.get("title").and_then(|v| v.as_str()));
+    let artist = clean_text(value.get("artist").and_then(|v| v.as_str()));
+    let source = clean_text(value.get("source").and_then(|v| v.as_str()));
+    let playing = value
+        .get("playing")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if title.is_none() && artist.is_none() {
+        return Some(MusicState {
+            playing: false,
+            title: None,
+            artist: None,
+            source,
+        });
+    }
+    Some(MusicState {
+        playing,
+        title,
+        artist,
+        source,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn current_music() -> Option<MusicState> {
+    let out = Command::new("playerctl")
+        .args(["-a", "metadata", "--format", "{{status}}\t{{title}}\t{{artist}}\t{{playerName}}"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut first_non_empty: Option<MusicState> = None;
+    for line in text.lines().map(str::trim).filter(|v| !v.is_empty()) {
+        let mut parts = line.split('\t');
+        let status = parts.next().unwrap_or_default();
+        let title = clean_text(parts.next());
+        let artist = clean_text(parts.next());
+        let source = clean_text(parts.next());
+        let playing = status.eq_ignore_ascii_case("playing");
+        let state = MusicState {
+            playing,
+            title,
+            artist,
+            source,
+        };
+        if state.playing {
+            return Some(state);
+        }
+        if first_non_empty.is_none() {
+            first_non_empty = Some(state);
+        }
+    }
+    first_non_empty
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn current_music() -> Option<MusicState> {
+    None
 }
 
 #[cfg(windows)]
