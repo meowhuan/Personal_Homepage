@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 在线状态管理</title>
+    <link rel="stylesheet" href="/admin/common.css" />
+    <style>
+      .wrap {
+        max-width: 980px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        padding: 10px 12px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.9);
+      }
+      .ghost {
+        background: rgba(255, 255, 255, 0.92);
+      }
+      .panel {
+        border-radius: 16px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.72);
+        padding: 12px;
+        margin-top: 12px;
+      }
+      .switch-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .hint {
+        margin-top: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        border-bottom: 1px solid rgba(234, 219, 234, 0.9);
+        padding: 10px 8px;
+        font-size: 13px;
+        text-align: left;
+        vertical-align: middle;
+      }
+      th {
+        font-size: 12px;
+        color: #7b6b7a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .online {
+        color: #2f8a58;
+      }
+      .offline {
+        color: #a63f63;
+      }
+      .small-btn {
+        padding: 6px 12px;
+        font-size: 12px;
+      }
+      .empty {
+        color: #7b6b7a;
+        font-size: 12px;
+      }
+      @media (max-width: 760px) {
+        th, td {
+          font-size: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar">
+          <span class="dot"></span>
+          Meow Status Admin
+        </div>
+        <div class="content">
+          <div class="row">
+            <div>
+              <label>Token</label>
+              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
+            </div>
+            <div>
+              <label>接口根路径</label>
+              <input id="base" type="text" value="" placeholder="留空表示同域名" />
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <button id="load" class="ghost">刷新状态</button>
+            <button id="save-all">保存全部设备手动离线</button>
+          </div>
+
+          <div class="panel">
+            <div class="switch-line">
+              <div>
+                <strong>全局手动离线</strong>
+                <div class="hint">开启后所有设备对外显示离线，且心跳上报静默（服务端不更新状态）。</div>
+              </div>
+              <label>
+                <input id="global-manual" type="checkbox" style="width:auto;" />
+                启用
+              </label>
+            </div>
+            <div class="toolbar">
+              <button id="save-global">保存全局设置</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <table>
+              <thead>
+                <tr>
+                  <th>设备 ID</th>
+                  <th>设备名</th>
+                  <th>当前状态</th>
+                  <th>手动离线</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="device-list"></tbody>
+            </table>
+            <div id="empty" class="empty" style="display:none;">暂无设备数据</div>
+          </div>
+
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const tokenEl = document.getElementById("token");
+      const baseEl = document.getElementById("base");
+      const statusEl = document.getElementById("status");
+      const globalEl = document.getElementById("global-manual");
+      const listEl = document.getElementById("device-list");
+      const emptyEl = document.getElementById("empty");
+
+      const setStatus = (text) => { statusEl.textContent = text; };
+      const api = (path) => `${baseEl.value.trim()}${path}`;
+
+      const headers = () => ({
+        "content-type": "application/json",
+        "x-token": tokenEl.value.trim()
+      });
+
+      const renderDevices = (items) => {
+        listEl.innerHTML = "";
+        if (!items || items.length === 0) {
+          emptyEl.style.display = "block";
+          return;
+        }
+        emptyEl.style.display = "none";
+        items.forEach((item) => {
+          const tr = document.createElement("tr");
+          tr.dataset.id = item.device_id;
+          tr.innerHTML = `
+            <td>${item.device_id || ""}</td>
+            <td>${item.device_name || ""}</td>
+            <td class="${item.online ? "online" : "offline"}">${item.online ? "在线" : "离线"}</td>
+            <td><input data-manual type="checkbox" style="width:auto;" ${item.manual_offline ? "checked" : ""} /></td>
+            <td><button class="small-btn" data-save>保存</button></td>
+          `;
+          tr.querySelector("[data-save]").addEventListener("click", async () => {
+            await saveDevice(tr.dataset.id, tr.querySelector("[data-manual]").checked);
+          });
+          listEl.appendChild(tr);
+        });
+      };
+
+      const loadAll = async () => {
+        try {
+          setStatus("加载中...");
+          const [statusRes, manualRes] = await Promise.all([
+            fetch(api("/status")),
+            fetch(api("/status/manual"))
+          ]);
+          if (!statusRes.ok || !manualRes.ok) throw new Error("load failed");
+          const statusItems = await statusRes.json();
+          const manualData = await manualRes.json();
+          globalEl.checked = !!manualData.enabled;
+          renderDevices(statusItems || []);
+          setStatus("已加载");
+        } catch (err) {
+          setStatus("加载失败");
+        }
+      };
+
+      const saveGlobal = async () => {
+        try {
+          setStatus("保存全局设置中...");
+          const res = await fetch(api("/status/manual"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ enabled: globalEl.checked })
+          });
+          setStatus(res.ok ? "全局设置已保存" : "全局设置保存失败");
+        } catch (err) {
+          setStatus("全局设置保存失败");
+        }
+      };
+
+      const saveDevice = async (deviceId, manualOffline) => {
+        try {
+          setStatus(`保存设备 ${deviceId} 中...`);
+          const res = await fetch(api("/device/status"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              device_id: deviceId,
+              manual_offline: manualOffline
+            })
+          });
+          setStatus(res.ok ? `设备 ${deviceId} 已保存` : `设备 ${deviceId} 保存失败`);
+          if (res.ok) {
+            await loadAll();
+          }
+        } catch (err) {
+          setStatus(`设备 ${deviceId} 保存失败`);
+        }
+      };
+
+      const saveAllDevices = async () => {
+        const rows = Array.from(listEl.querySelectorAll("tr"));
+        if (rows.length === 0) {
+          setStatus("没有可保存的设备");
+          return;
+        }
+        setStatus("批量保存中...");
+        for (const row of rows) {
+          const deviceId = row.dataset.id;
+          const manual = row.querySelector("[data-manual]").checked;
+          const res = await fetch(api("/device/status"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              device_id: deviceId,
+              manual_offline: manual
+            })
+          });
+          if (!res.ok) {
+            setStatus(`批量保存失败：${deviceId}`);
+            return;
+          }
+        }
+        setStatus("批量保存成功");
+        await loadAll();
+      };
+
+      document.getElementById("load").addEventListener("click", loadAll);
+      document.getElementById("save-global").addEventListener("click", saveGlobal);
+      document.getElementById("save-all").addEventListener("click", saveAllDevices);
+      loadAll();
+    </script>
+  </body>
+</html>

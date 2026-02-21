@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 行程表管理</title>
+    <link rel="stylesheet" href="/admin/common.css" />
+    <style>
+      .wrap {
+        max-width: 900px;
+      }
+      textarea, input, select {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        padding: 10px 12px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.8);
+      }
+      .list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .item {
+        border-radius: 16px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.7);
+        padding: 12px;
+      }
+      .item-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 12px;
+        color: #7b6b7a;
+      }
+      .item-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+      }
+      .item-note {
+        margin-top: 10px;
+      }
+      .hint {
+        margin-top: 8px;
+      }
+      .danger {
+        background: #a03555;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar">
+          <span class="dot"></span>
+          Meow Schedule Admin
+        </div>
+        <div class="content">
+          <div class="row">
+            <div>
+              <label>Token</label>
+              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
+            </div>
+            <div>
+              <label>接口地址</label>
+              <input id="api" type="text" value="/schedule" />
+            </div>
+          </div>
+          <div class="toolbar">
+            <button id="add">新增行程</button>
+            <button id="load" class="ghost">加载</button>
+            <button id="save">保存</button>
+          </div>
+          <div class="list" id="list"></div>
+          <div class="hint">提示：时间/标题必填，其它可留空。拖拽排序暂不支持，可用“排序”字段。</div>
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const statusEl = document.getElementById("status");
+      const tokenEl = document.getElementById("token");
+      const apiEl = document.getElementById("api");
+      const listEl = document.getElementById("list");
+
+      const setStatus = (text) => { statusEl.textContent = text; };
+
+      const createItem = (item = {}) => {
+        const wrap = document.createElement("div");
+        wrap.className = "item";
+        wrap.innerHTML = `
+          <div class="item-header">
+            <span>行程项</span>
+            <button class="danger" data-remove>删除</button>
+          </div>
+          <div class="item-grid">
+            <div>
+              <label>时间 *</label>
+              <input data-time placeholder="如：今晚 19:00" value="${item.time || ""}" />
+            </div>
+            <div>
+              <label>标题 *</label>
+              <input data-title placeholder="如：晚饭" value="${item.title || ""}" />
+            </div>
+            <div>
+              <label>地点</label>
+              <input data-location placeholder="如：咖啡馆" value="${item.location || ""}" />
+            </div>
+            <div>
+              <label>标签</label>
+              <input data-tag placeholder="如：私事" value="${item.tag || ""}" />
+            </div>
+            <div>
+              <label>排序</label>
+              <input data-sort type="number" placeholder="0" value="${item.sort_order ?? ""}" />
+            </div>
+          </div>
+          <div class="item-note">
+            <label>备注</label>
+            <input data-note placeholder="可选" value="${item.note || ""}" />
+          </div>
+        `;
+        wrap.querySelector("[data-remove]").addEventListener("click", () => {
+          wrap.remove();
+        });
+        return wrap;
+      };
+
+      const readItems = () => {
+        const items = [];
+        listEl.querySelectorAll(".item").forEach((el, idx) => {
+          const time = el.querySelector("[data-time]").value.trim();
+          const title = el.querySelector("[data-title]").value.trim();
+          if (!time || !title) return;
+          const location = el.querySelector("[data-location]").value.trim();
+          const tag = el.querySelector("[data-tag]").value.trim();
+          const note = el.querySelector("[data-note]").value.trim();
+          const sortRaw = el.querySelector("[data-sort]").value.trim();
+          items.push({
+            time,
+            title,
+            location: location || undefined,
+            tag: tag || undefined,
+            note: note || undefined,
+            sort_order: sortRaw === "" ? idx : Number(sortRaw)
+          });
+        });
+        return items;
+      };
+
+      const loadSchedule = async () => {
+        try {
+          setStatus("加载中...");
+          const res = await fetch(apiEl.value);
+          const items = await res.json();
+          listEl.innerHTML = "";
+          items.forEach((item) => listEl.appendChild(createItem(item)));
+          if (items.length === 0) {
+            listEl.appendChild(createItem());
+          }
+          setStatus("已加载");
+        } catch (err) {
+          setStatus("加载失败");
+        }
+      };
+
+      const saveSchedule = async () => {
+        try {
+          const payload = { items: readItems() };
+          setStatus("保存中...");
+          const res = await fetch(apiEl.value, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-token": tokenEl.value
+            },
+            body: JSON.stringify(payload)
+          });
+          setStatus(res.ok ? "保存成功" : "保存失败");
+        } catch (err) {
+          setStatus("保存失败");
+        }
+      };
+
+      document.getElementById("add").addEventListener("click", () => {
+        listEl.appendChild(createItem());
+      });
+      document.getElementById("load").addEventListener("click", loadSchedule);
+      document.getElementById("save").addEventListener("click", saveSchedule);
+      loadSchedule();
+    </script>
+  </body>
+</html>
