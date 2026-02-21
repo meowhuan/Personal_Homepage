@@ -37,6 +37,8 @@ struct DeviceStatus {
     online: bool,
     last_seen: i64,
     idle_seconds: Option<u64>,
+    manual_offline: bool,
+    global_manual_offline: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -70,6 +72,25 @@ struct ScheduleItemInput {
 #[derive(Deserialize)]
 struct VisitPayload {
     visitor_id: String,
+}
+
+#[derive(Deserialize)]
+struct ManualStatusPayload {
+    enabled: bool,
+}
+
+#[derive(Serialize)]
+struct ManualStatusResponse {
+    enabled: bool,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct DeviceStatusUpdatePayload {
+    device_id: String,
+    device_name: Option<String>,
+    online: Option<bool>,
+    manual_offline: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -127,7 +148,10 @@ async fn main() {
 
     let db_path = std::env::var("STATUS_DB").unwrap_or_else(|_| "status.db".to_string());
     let token = std::env::var("STATUS_TOKEN").unwrap_or_else(|_| "KFCVME50".to_string());
-    let port = std::env::var("STATUS_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(7999);
+    let port = std::env::var("STATUS_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(7999);
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -137,6 +161,11 @@ async fn main() {
             online INTEGER NOT NULL,
             last_seen INTEGER NOT NULL,
             idle_seconds INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS status_control (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            global_manual_offline INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS schedule_items (
             id TEXT PRIMARY KEY,
@@ -166,6 +195,16 @@ async fn main() {
         );",
     )
     .expect("init db");
+    let _ = conn.execute(
+        "ALTER TABLE device_status ADD COLUMN manual_offline INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT INTO status_control (id, global_manual_offline, updated_at)
+         VALUES (1, 0, ?1)
+         ON CONFLICT(id) DO NOTHING",
+        params![now_ts()],
+    );
 
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
@@ -182,7 +221,13 @@ async fn main() {
         .route("/version", get(|| async { "status-backend v1.0" }))
         .route("/heartbeat", post(heartbeat))
         .route("/device", get(delete_device))
+        .route("/device/status", post(device_status_update))
         .route("/status", get(status))
+        .route(
+            "/status/manual",
+            get(get_manual_status).post(set_manual_status),
+        )
+        .route("/status/admin", get(status_admin_page))
         .route("/schedule", get(schedule_list).post(schedule_update))
         .route("/schedule/admin", get(schedule_admin_page))
         .route("/blog", get(blog_list).post(blog_update))
@@ -209,11 +254,14 @@ async fn heartbeat(
         return StatusCode::UNAUTHORIZED;
     }
 
-    let now = now_ts();
     let conn = state.db.lock().unwrap();
+    if is_global_manual_offline(&conn) {
+        return StatusCode::OK;
+    }
+    let now = now_ts();
     let _ = conn.execute(
-        "INSERT INTO device_status (device_id, device_name, online, last_seen, idle_seconds)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO device_status (device_id, device_name, online, last_seen, idle_seconds, manual_offline)
+         VALUES (?1, ?2, ?3, ?4, ?5, COALESCE((SELECT manual_offline FROM device_status WHERE device_id = ?1), 0))
          ON CONFLICT(device_id) DO UPDATE SET
            device_name=excluded.device_name,
            online=excluded.online,
@@ -234,9 +282,10 @@ async fn heartbeat(
 async fn status(State(state): State<AppState>) -> impl IntoResponse {
     let now = now_ts();
     let conn = state.db.lock().unwrap();
+    let global_manual_offline = is_global_manual_offline(&conn);
     let mut stmt = conn
         .prepare(
-            "SELECT device_id, device_name, online, last_seen, idle_seconds
+            "SELECT device_id, device_name, online, last_seen, idle_seconds, manual_offline
              FROM device_status
              ORDER BY device_id ASC",
         )
@@ -246,14 +295,19 @@ async fn status(State(state): State<AppState>) -> impl IntoResponse {
         .query_map([], |row| {
             let last_seen: i64 = row.get(3)?;
             let online_flag: i32 = row.get(2)?;
+            let manual_offline: i32 = row.get(5)?;
             let stale = now.saturating_sub(last_seen) > 300;
-            let online = online_flag == 1 && !stale;
+            let device_manual_offline = manual_offline == 1;
+            let online =
+                !global_manual_offline && !device_manual_offline && online_flag == 1 && !stale;
             Ok(DeviceStatus {
                 device_id: row.get(0)?,
                 device_name: row.get(1)?,
                 online,
                 last_seen,
                 idle_seconds: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                manual_offline: device_manual_offline,
+                global_manual_offline,
             })
         })
         .unwrap();
@@ -622,6 +676,347 @@ async fn schedule_admin_page() -> impl IntoResponse {
     )
 }
 
+async fn status_admin_page() -> impl IntoResponse {
+    Html(
+        r#"<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 在线状态管理</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Kalam", "Segoe UI", sans-serif;
+        background: linear-gradient(140deg, #fff1f7, #f5f4ff);
+        color: #2b1d2a;
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 24px auto;
+        padding: 24px;
+      }
+      .window {
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 16px 36px rgba(47, 20, 47, 0.12);
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        overflow: hidden;
+      }
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: linear-gradient(90deg, rgba(255, 219, 235, 0.9), rgba(209, 244, 255, 0.9));
+        font-size: 14px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #f0b1c9;
+        box-shadow: 16px 0 0 #f6d48f, 32px 0 0 #b9efdf;
+      }
+      .content {
+        padding: 18px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .row > div {
+        flex: 1;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        padding: 10px 12px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.9);
+      }
+      .toolbar {
+        display: flex;
+        gap: 10px;
+        margin: 12px 0;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 0;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: #2b1d2a;
+        color: #fff;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      .ghost {
+        background: rgba(255, 255, 255, 0.92);
+        color: #2b1d2a;
+        border: 1px solid #eadbea;
+      }
+      .panel {
+        border-radius: 16px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.72);
+        padding: 12px;
+        margin-top: 12px;
+      }
+      .switch-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .hint {
+        margin-top: 8px;
+        color: #7b6b7a;
+        font-size: 12px;
+      }
+      .status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #7b6b7a;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        border-bottom: 1px solid rgba(234, 219, 234, 0.9);
+        padding: 10px 8px;
+        font-size: 13px;
+        text-align: left;
+        vertical-align: middle;
+      }
+      th {
+        font-size: 12px;
+        color: #7b6b7a;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .online {
+        color: #2f8a58;
+      }
+      .offline {
+        color: #a63f63;
+      }
+      .small-btn {
+        padding: 6px 12px;
+        font-size: 12px;
+      }
+      .empty {
+        color: #7b6b7a;
+        font-size: 12px;
+      }
+      @media (max-width: 760px) {
+        .row {
+          flex-direction: column;
+        }
+        th, td {
+          font-size: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar">
+          <span class="dot"></span>
+          Meow Status Admin
+        </div>
+        <div class="content">
+          <div class="row">
+            <div>
+              <label>Token</label>
+              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
+            </div>
+            <div>
+              <label>接口根路径</label>
+              <input id="base" type="text" value="" placeholder="留空表示同域名" />
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <button id="load" class="ghost">刷新状态</button>
+            <button id="save-all">保存全部设备手动离线</button>
+          </div>
+
+          <div class="panel">
+            <div class="switch-line">
+              <div>
+                <strong>全局手动离线</strong>
+                <div class="hint">开启后所有设备对外显示离线，且心跳上报静默（服务端不更新状态）。</div>
+              </div>
+              <label>
+                <input id="global-manual" type="checkbox" style="width:auto;" />
+                启用
+              </label>
+            </div>
+            <div class="toolbar">
+              <button id="save-global">保存全局设置</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <table>
+              <thead>
+                <tr>
+                  <th>设备 ID</th>
+                  <th>设备名</th>
+                  <th>当前状态</th>
+                  <th>手动离线</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="device-list"></tbody>
+            </table>
+            <div id="empty" class="empty" style="display:none;">暂无设备数据</div>
+          </div>
+
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const tokenEl = document.getElementById("token");
+      const baseEl = document.getElementById("base");
+      const statusEl = document.getElementById("status");
+      const globalEl = document.getElementById("global-manual");
+      const listEl = document.getElementById("device-list");
+      const emptyEl = document.getElementById("empty");
+
+      const setStatus = (text) => { statusEl.textContent = text; };
+      const api = (path) => `${baseEl.value.trim()}${path}`;
+
+      const headers = () => ({
+        "content-type": "application/json",
+        "x-token": tokenEl.value.trim()
+      });
+
+      const renderDevices = (items) => {
+        listEl.innerHTML = "";
+        if (!items || items.length === 0) {
+          emptyEl.style.display = "block";
+          return;
+        }
+        emptyEl.style.display = "none";
+        items.forEach((item) => {
+          const tr = document.createElement("tr");
+          tr.dataset.id = item.device_id;
+          tr.innerHTML = `
+            <td>${item.device_id || ""}</td>
+            <td>${item.device_name || ""}</td>
+            <td class="${item.online ? "online" : "offline"}">${item.online ? "在线" : "离线"}</td>
+            <td><input data-manual type="checkbox" style="width:auto;" ${item.manual_offline ? "checked" : ""} /></td>
+            <td><button class="small-btn" data-save>保存</button></td>
+          `;
+          tr.querySelector("[data-save]").addEventListener("click", async () => {
+            await saveDevice(tr.dataset.id, tr.querySelector("[data-manual]").checked);
+          });
+          listEl.appendChild(tr);
+        });
+      };
+
+      const loadAll = async () => {
+        try {
+          setStatus("加载中...");
+          const [statusRes, manualRes] = await Promise.all([
+            fetch(api("/status")),
+            fetch(api("/status/manual"))
+          ]);
+          if (!statusRes.ok || !manualRes.ok) throw new Error("load failed");
+          const statusItems = await statusRes.json();
+          const manualData = await manualRes.json();
+          globalEl.checked = !!manualData.enabled;
+          renderDevices(statusItems || []);
+          setStatus("已加载");
+        } catch (err) {
+          setStatus("加载失败");
+        }
+      };
+
+      const saveGlobal = async () => {
+        try {
+          setStatus("保存全局设置中...");
+          const res = await fetch(api("/status/manual"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ enabled: globalEl.checked })
+          });
+          setStatus(res.ok ? "全局设置已保存" : "全局设置保存失败");
+        } catch (err) {
+          setStatus("全局设置保存失败");
+        }
+      };
+
+      const saveDevice = async (deviceId, manualOffline) => {
+        try {
+          setStatus(`保存设备 ${deviceId} 中...`);
+          const res = await fetch(api("/device/status"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              device_id: deviceId,
+              manual_offline: manualOffline
+            })
+          });
+          setStatus(res.ok ? `设备 ${deviceId} 已保存` : `设备 ${deviceId} 保存失败`);
+          if (res.ok) {
+            await loadAll();
+          }
+        } catch (err) {
+          setStatus(`设备 ${deviceId} 保存失败`);
+        }
+      };
+
+      const saveAllDevices = async () => {
+        const rows = Array.from(listEl.querySelectorAll("tr"));
+        if (rows.length === 0) {
+          setStatus("没有可保存的设备");
+          return;
+        }
+        setStatus("批量保存中...");
+        for (const row of rows) {
+          const deviceId = row.dataset.id;
+          const manual = row.querySelector("[data-manual]").checked;
+          const res = await fetch(api("/device/status"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              device_id: deviceId,
+              manual_offline: manual
+            })
+          });
+          if (!res.ok) {
+            setStatus(`批量保存失败：${deviceId}`);
+            return;
+          }
+        }
+        setStatus("批量保存成功");
+        await loadAll();
+      };
+
+      document.getElementById("load").addEventListener("click", loadAll);
+      document.getElementById("save-global").addEventListener("click", saveGlobal);
+      document.getElementById("save-all").addEventListener("click", saveAllDevices);
+      loadAll();
+    </script>
+  </body>
+</html>"#,
+    )
+}
+
 async fn blog_admin_page() -> impl IntoResponse {
     Html(
         r#"<!doctype html>
@@ -960,6 +1355,135 @@ async fn blog_list(State(state): State<AppState>) -> impl IntoResponse {
     Json(list)
 }
 
+async fn get_manual_status(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let result = conn.query_row(
+        "SELECT global_manual_offline, updated_at FROM status_control WHERE id = 1",
+        [],
+        |row| {
+            Ok(ManualStatusResponse {
+                enabled: row.get::<_, i32>(0)? == 1,
+                updated_at: row.get(1)?,
+            })
+        },
+    );
+    let payload = result.unwrap_or(ManualStatusResponse {
+        enabled: false,
+        updated_at: 0,
+    });
+    Json(payload)
+}
+
+async fn set_manual_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ManualStatusPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let now = now_ts();
+    let conn = state.db.lock().unwrap();
+    if conn
+        .execute(
+            "INSERT INTO status_control (id, global_manual_offline, updated_at)
+             VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET
+               global_manual_offline = excluded.global_manual_offline,
+               updated_at = excluded.updated_at",
+            params![payload.enabled as i32, now],
+        )
+        .is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(ManualStatusResponse {
+            enabled: payload.enabled,
+            updated_at: now,
+        }),
+    )
+        .into_response()
+}
+
+async fn device_status_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<DeviceStatusUpdatePayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED;
+    }
+
+    let now = now_ts();
+    let conn = state.db.lock().unwrap();
+    let existing = conn
+        .query_row(
+            "SELECT device_name, online, last_seen, idle_seconds, manual_offline
+             FROM device_status
+             WHERE device_id = ?1",
+            params![payload.device_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, i32>(4)?,
+                ))
+            },
+        )
+        .ok();
+
+    let device_name = payload
+        .device_name
+        .or_else(|| existing.as_ref().map(|v| v.0.clone()))
+        .unwrap_or_else(|| payload.device_id.clone());
+    let online = payload
+        .online
+        .unwrap_or_else(|| existing.as_ref().map(|v| v.1 == 1).unwrap_or(false));
+    let last_seen = if payload.online.is_some() {
+        now
+    } else {
+        existing.as_ref().map(|v| v.2).unwrap_or(now)
+    };
+    let idle_seconds = if payload.online.is_some() {
+        None
+    } else {
+        existing.as_ref().and_then(|v| v.3)
+    };
+    let manual_offline = payload
+        .manual_offline
+        .unwrap_or_else(|| existing.as_ref().map(|v| v.4 == 1).unwrap_or(false));
+
+    if conn
+        .execute(
+            "INSERT INTO device_status (device_id, device_name, online, last_seen, idle_seconds, manual_offline)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(device_id) DO UPDATE SET
+               device_name = excluded.device_name,
+               online = excluded.online,
+               last_seen = excluded.last_seen,
+               idle_seconds = excluded.idle_seconds,
+               manual_offline = excluded.manual_offline",
+            params![
+                payload.device_id,
+                device_name,
+                online as i32,
+                last_seen,
+                idle_seconds,
+                manual_offline as i32,
+            ],
+        )
+        .is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+
+    StatusCode::OK
+}
+
 async fn blog_detail(
     State(state): State<AppState>,
     axum::extract::Path(slug): axum::extract::Path<String>,
@@ -1121,7 +1645,10 @@ async fn delete_device(
         return StatusCode::UNAUTHORIZED;
     }
     let conn = state.db.lock().unwrap();
-    let _ = conn.execute("DELETE FROM device_status WHERE device_id = ?1", params![q.id]);
+    let _ = conn.execute(
+        "DELETE FROM device_status WHERE device_id = ?1",
+        params![q.id],
+    );
     StatusCode::OK
 }
 
@@ -1139,6 +1666,16 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
         }
     }
     false
+}
+
+fn is_global_manual_offline(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT global_manual_offline FROM status_control WHERE id = 1",
+        [],
+        |row| row.get::<_, i32>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
 }
 
 fn now_ts() -> i64 {
