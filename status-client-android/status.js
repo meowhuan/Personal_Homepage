@@ -18,6 +18,7 @@ const OFFLINE_DELAY_MS = 5 * 60 * 1000;
 const ENABLE_MUSIC_NOTIFICATION = true;
 const MUSIC_APP_PACKAGE = "com.netease.cloudmusic";
 const MUSIC_STALE_MS = 3 * 60 * 1000;
+const MUSIC_PUSH_MIN_INTERVAL_MS = 6 * 1000;
 
 // ======= 前台保活 =======
 try {
@@ -42,6 +43,8 @@ let musicState = {
   source: MUSIC_SOURCE,
   updatedAt: 0
 };
+let lastMusicSignature = "";
+let lastMusicPushAt = 0;
 
 function cleanText(v) {
   if (!v) return null;
@@ -59,6 +62,10 @@ function updateMusicState(title, artist) {
     source: MUSIC_SOURCE,
     updatedAt: Date.now()
   };
+}
+
+function musicSignature(s) {
+  return `${s.playing ? 1 : 0}|${s.title || ""}|${s.artist || ""}|${s.source || ""}`;
 }
 
 function clearMusicState() {
@@ -112,7 +119,22 @@ function parseNeteaseNotification(notification) {
     songArtist = songArtist || cleanText(pair.slice(1).join(" - "));
   }
 
+  const before = musicSignature(readMusicSnapshot());
   updateMusicState(songTitle, songArtist);
+  const after = musicSignature(readMusicSnapshot());
+  if (before !== after) {
+    pushMusicHeartbeat();
+  }
+}
+
+function pushMusicHeartbeat() {
+  const now = Date.now();
+  const current = musicSignature(readMusicSnapshot());
+  if (current === lastMusicSignature) return;
+  if (lastMusicPushAt && now - lastMusicPushAt < MUSIC_PUSH_MIN_INTERVAL_MS) return;
+  lastMusicSignature = current;
+  lastMusicPushAt = now;
+  sendHeartbeat(true, 0);
 }
 
 // ======= 心跳上报 =======
@@ -180,4 +202,5 @@ setInterval(() => {
 
 // 启动时立即上报一次
 clearMusicState();
+lastMusicSignature = musicSignature(readMusicSnapshot());
 sendHeartbeat(true, 0);

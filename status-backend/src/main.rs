@@ -154,6 +154,13 @@ struct VisitorStats {
     updated_at: i64,
 }
 
+#[derive(Serialize)]
+struct VersionInfo {
+    service: String,
+    version: String,
+    music_fields: bool,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -166,6 +173,8 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(7999);
+    let build_version =
+        std::env::var("STATUS_BUILD").unwrap_or_else(|_| "status-backend v1.1-music".to_string());
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -245,7 +254,19 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(|| async { "ok" }))
-        .route("/version", get(|| async { "status-backend v1.0" }))
+        .route(
+            "/version",
+            get(move || {
+                let build_version = build_version.clone();
+                async move {
+                    Json(VersionInfo {
+                        service: "status-backend".to_string(),
+                        version: build_version,
+                        music_fields: true,
+                    })
+                }
+            }),
+        )
         .route("/heartbeat", post(heartbeat))
         .route("/device", get(delete_device))
         .route("/device/status", post(device_status_update))
@@ -291,6 +312,16 @@ async fn heartbeat(
     let music_title = payload.music_title;
     let music_artist = payload.music_artist;
     let music_source = payload.music_source;
+    tracing::info!(
+        "heartbeat recv: device_id={} online={} idle={:?} music_playing={} title={:?} artist={:?} source={:?}",
+        payload.device_id,
+        payload.online,
+        payload.idle_seconds,
+        music_playing,
+        music_title,
+        music_artist,
+        music_source
+    );
     let _ = conn.execute(
         "INSERT INTO device_status (
             device_id, device_name, online, last_seen, idle_seconds, manual_offline,

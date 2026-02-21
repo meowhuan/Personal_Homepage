@@ -12,6 +12,8 @@ DEVICE_ID="$(getprop ro.product.device)"
 DEVICE_NAME="$(getprop ro.product.model)"
 HEARTBEAT_INTERVAL=60
 OFFLINE_DELAY=300
+MUSIC_POLL_INTERVAL=5
+MUSIC_PUSH_MIN_INTERVAL=6
 ENABLE_MUSIC_NOTIFICATION=1
 MUSIC_PACKAGE="com.netease.cloudmusic"
 MUSIC_SOURCE="netease-cloudmusic"
@@ -21,6 +23,9 @@ if [ -f "$CONFIG" ]; then
 fi
 
 last_off=0
+last_hb_ts=0
+last_music_push_ts=0
+last_music_sig=""
 
 json_escape() {
   echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -92,6 +97,29 @@ post_json() {
   fi
 }
 
+current_presence() {
+  local now="$1"
+  if screen_is_on; then
+    last_off=0
+    echo "true 0"
+    return 0
+  fi
+  if [ "$last_off" -eq 0 ]; then
+    last_off="$now"
+  fi
+  local idle=$((now - last_off))
+  if [ "$idle" -ge "$OFFLINE_DELAY" ]; then
+    echo "false $idle"
+  else
+    echo "true $idle"
+  fi
+}
+
+current_music_sig() {
+  extract_music_from_notification
+  echo "${music_playing}|${music_title}|${music_artist}|${music_source}"
+}
+
 screen_is_on() {
   dumpsys power | grep -q "mScreenOn=true" && return 0
   dumpsys display | grep -q "mScreenState=ON" && return 0
@@ -101,19 +129,24 @@ screen_is_on() {
 
 while true; do
   now=$(date +%s)
-  if screen_is_on; then
-    last_off=0
-    post_json true 0
-  else
-    if [ "$last_off" -eq 0 ]; then
-      last_off=$now
-    fi
-    idle=$((now - last_off))
-    if [ "$idle" -ge "$OFFLINE_DELAY" ]; then
-      post_json false "$idle"
-    else
-      post_json true "$idle"
-    fi
+
+  # 常规心跳：保持原频率
+  if [ $((now - last_hb_ts)) -ge "$HEARTBEAT_INTERVAL" ]; then
+    set -- $(current_presence "$now")
+    post_json "$1" "$2"
+    last_hb_ts="$now"
   fi
-  sleep "$HEARTBEAT_INTERVAL"
+
+  # 音乐变化：独立快速上报
+  sig="$(current_music_sig)"
+  if [ "$sig" != "$last_music_sig" ]; then
+    if [ "$last_music_push_ts" -eq 0 ] || [ $((now - last_music_push_ts)) -ge "$MUSIC_PUSH_MIN_INTERVAL" ]; then
+      set -- $(current_presence "$now")
+      post_json "$1" "$2"
+      last_music_push_ts="$now"
+    fi
+    last_music_sig="$sig"
+  fi
+
+  sleep "$MUSIC_POLL_INTERVAL"
 done

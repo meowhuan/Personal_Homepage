@@ -25,6 +25,7 @@ Android offers two approaches:
 功能 / Features:
 
 - 60s 心跳 / heartbeat
+- 音乐状态独立快速上报（仅在歌曲变化时触发）/ fast music-only push on changes
 - 锁屏 5 分钟离线 / offline after 5 min screen-off
 - 前台保活（尽力）/ best-effort keep-alive
 - 尝试从通知读取网易云音乐当前歌曲（需通知读取权限）
@@ -49,11 +50,14 @@ DEVICE_ID="android-root"
 DEVICE_NAME="Android Root"
 HEARTBEAT_INTERVAL=60
 OFFLINE_DELAY=300
+MUSIC_POLL_INTERVAL=5
+MUSIC_PUSH_MIN_INTERVAL=6
 ```
 
 功能 / Features:
 
 - 60s 心跳 / heartbeat
+- 音乐状态独立快速上报（仅在变化时）
 - 锁屏 5 分钟离线（通过 `dumpsys power/display`）
 - 尝试通过通知读取网易云当前歌曲并上报（root + `dumpsys notification --noredact`）
 - 断网/关机交由后端超时处理
@@ -66,6 +70,8 @@ Offline/Power-off is handled by backend timeout.
 ENABLE_MUSIC_NOTIFICATION=1
 MUSIC_PACKAGE="com.netease.cloudmusic"
 MUSIC_SOURCE="netease-cloudmusic"
+MUSIC_POLL_INTERVAL=5
+MUSIC_PUSH_MIN_INTERVAL=6
 ```
 
 ## 打包模块 / Pack Module

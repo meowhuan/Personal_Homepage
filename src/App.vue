@@ -260,11 +260,11 @@ const {
                   <div class="min-w-0 flex-1">
                     <div class="truncate">{{ item.device_name }}</div>
                     <div
-                      v-if="item.online && item.music_playing && (item.music_title || item.music_artist)"
+                      v-if="item.online && (item.music_title || item.music_artist)"
                       class="mt-0.5 truncate text-[10px]"
                       :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
                     >
-                      🎵 {{ item.music_title || "未知歌曲" }}
+                      {{ item.music_playing ? "🎵 正在听" : "⏸ 暂停" }}: {{ item.music_title || "未知歌曲" }}
                       <span v-if="item.music_artist"> · {{ item.music_artist }}</span>
                     </div>
                   </div>

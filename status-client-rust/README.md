@@ -16,6 +16,8 @@ device_id = "pc-main"
 device_name = "PC Main"
 idle_timeout_secs = 300
 heartbeat_interval_secs = 60
+music_poll_interval_secs = 5
+music_push_min_interval_secs = 6
 log_file = "status-client.log"
 ```
 
@@ -27,8 +29,11 @@ log_file = "status-client.log"
 - `DEVICE_NAME`
 - `IDLE_TIMEOUT_SECS`
 - `HEARTBEAT_INTERVAL_SECS`
+- `MUSIC_POLL_INTERVAL_SECS`
+- `MUSIC_PUSH_MIN_INTERVAL_SECS`
 - `STATUS_CONFIG` (path to config)
 - `LOG_FILE` (log file path)
+- `LOG_MAX_BYTES`
 
 ## 构建 / Build
 
@@ -62,6 +67,33 @@ Heartbeat also includes music status:
 - Windows: SMTC
 - Linux: MPRIS (`playerctl` required)
 - NetEase Cloud: SMTC support requires installing the [InfLink-rs](https://github.com/apoint123/inflink-rs) plugin after installing the [BetterNCM](https://github.com/std-microblock/chromatic) framework.
+- 主心跳频率不变；音乐状态会单独快速轮询并仅在变化时触发额外上报。
+
+## 排障 / Troubleshooting
+
+- Windows 听歌识别不到：
+  - 请确保客户端运行在“当前登录用户会话”中（不要以 SYSTEM 会话运行）。
+  - 任务计划建议：使用当前用户、仅在用户登录时运行。
+  - 某些播放器未暴露 SMTC 时会返回空。
+- 日志文件没有生成：
+  - 客户端会优先写入 `log_file` 配置路径。
+  - 若路径不可写，会自动回退到系统临时目录 `status-client.log`。
+  - 默认日志级别为 `info`；也可用 `RUST_LOG=debug` 提高详细度。
+  - 可用 `LOG_MAX_BYTES`（默认 `2097152`，2MB）限制单文件大小，超限会自动截断。
+
+### 最小 SMTC 测试 / Minimal SMTC Probe (Windows)
+
+在 `status-client-rust` 目录运行：
+
+```bash
+cargo run --bin smtc-probe
+```
+
+输出会是 JSON（例如 `ok/playing/title/artist/source`），并同时写一份日志到系统临时目录：
+
+`%TEMP%\smtc-probe.log`
+
+如果 probe 能读到歌，但主程序读不到，优先检查任务计划运行账户/会话（是否为登录用户会话）。
 
 ## 开机自启 / Auto-start
 
