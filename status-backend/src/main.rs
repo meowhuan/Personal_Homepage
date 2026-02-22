@@ -115,6 +115,7 @@ struct BlogPost {
     tag: Option<String>,
     excerpt: String,
     content: Vec<String>,
+    content_md: String,
     sort_order: i64,
     updated_at: i64,
 }
@@ -142,7 +143,8 @@ struct BlogPostInput {
     date: String,
     tag: Option<String>,
     excerpt: Option<String>,
-    content: Vec<String>,
+    content: Option<Vec<String>>,
+    content_md: Option<String>,
     sort_order: Option<i64>,
 }
 
@@ -218,6 +220,7 @@ async fn main() {
             tag TEXT,
             excerpt TEXT NOT NULL,
             content_json TEXT NOT NULL,
+            content_md TEXT,
             sort_order INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );",
@@ -235,6 +238,7 @@ async fn main() {
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_artist TEXT", []);
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_source TEXT", []);
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_updated_at INTEGER", []);
+    let _ = conn.execute("ALTER TABLE blog_posts ADD COLUMN content_md TEXT", []);
     let _ = conn.execute(
         "INSERT INTO status_control (id, global_manual_offline, updated_at)
          VALUES (1, 0, ?1)
@@ -690,7 +694,7 @@ async fn blog_detail(
 ) -> impl IntoResponse {
     let conn = state.db.lock().unwrap();
     let row = conn.query_row(
-        "SELECT slug, title, date, tag, excerpt, content_json, sort_order, updated_at
+        "SELECT slug, title, date, tag, excerpt, content_json, content_md, sort_order, updated_at
          FROM blog_posts
          WHERE slug = ?1
          LIMIT 1",
@@ -698,6 +702,9 @@ async fn blog_detail(
         |row| {
             let content_json: String = row.get(5)?;
             let content = serde_json::from_str::<Vec<String>>(&content_json).unwrap_or_default();
+            let content_md = row
+                .get::<_, Option<String>>(6)?
+                .unwrap_or_else(|| content.join("\n"));
             Ok(BlogPost {
                 slug: row.get(0)?,
                 title: row.get(1)?,
@@ -705,8 +712,9 @@ async fn blog_detail(
                 tag: row.get(3)?,
                 excerpt: row.get(4)?,
                 content,
-                sort_order: row.get(6)?,
-                updated_at: row.get(7)?,
+                content_md,
+                sort_order: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         },
     );
@@ -750,18 +758,33 @@ async fn blog_update(
             slug = format!("post-{}-{}", now, idx);
         }
         let sort_order = item.sort_order.unwrap_or(idx as i64);
+        let input_content = item.content.unwrap_or_default();
+        let content_md = item
+            .content_md
+            .unwrap_or_else(|| input_content.join("\n"));
+        let content: Vec<String> = if !input_content.is_empty() {
+            input_content
+        } else {
+            content_md.split('\n').map(|v| v.to_string()).collect()
+        };
         let excerpt = item
             .excerpt
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| item.content.first().cloned().unwrap_or_default());
-        let content_json = match serde_json::to_string(&item.content) {
+            .unwrap_or_else(|| {
+                content
+                    .iter()
+                    .find(|line| !line.trim().is_empty())
+                    .cloned()
+                    .unwrap_or_default()
+            });
+        let content_json = match serde_json::to_string(&content) {
             Ok(v) => v,
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR,
         };
         if tx
             .execute(
-                "INSERT INTO blog_posts (slug, title, date, tag, excerpt, content_json, sort_order, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO blog_posts (slug, title, date, tag, excerpt, content_json, content_md, sort_order, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     slug,
                     item.title,
@@ -769,6 +792,7 @@ async fn blog_update(
                     item.tag,
                     excerpt,
                     content_json,
+                    content_md,
                     sort_order,
                     now
                 ],

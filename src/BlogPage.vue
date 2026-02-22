@@ -53,8 +53,6 @@ const tagMenuRef = ref(null);
 const themeMedia = ref(null);
 
 const isListView = computed(() => !currentPost.value);
-const markdownImagePattern = /^!\[(.*?)\]\((.+?)\)$/;
-const imageExtPattern = /\.(png|jpe?g|gif|webp|avif|svg)(\?.*)?$/i;
 
 const formatDate = (dateStr) =>
   new Date(dateStr).toLocaleDateString("zh-CN", {
@@ -136,40 +134,191 @@ const onDocumentClick = (event) => {
   }
 };
 
-const isLikelyImageUrl = (value) => {
-  if (!value) return false;
+const escapeHtml = (value) =>
+  String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+
+const safeUrl = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/") || raw.startsWith("./") || raw.startsWith("../") || raw.startsWith("#")) {
+    return raw;
+  }
   try {
-    const url = new URL(value);
-    if (!["http:", "https:"].includes(url.protocol)) return false;
-    return imageExtPattern.test(`${url.pathname}${url.search}`);
+    const parsed = new URL(raw);
+    return ["http:", "https:", "mailto:"].includes(parsed.protocol) ? raw : "";
   } catch {
-    return false;
+    return "";
   }
 };
 
-const normalizeImageBlock = (url, alt, idx) => ({
-  type: "image",
-  key: `img-${idx}-${url}`,
-  url,
-  alt: alt?.trim() || "博客图片"
-});
+const renderInlineMarkdown = (text) => {
+  let html = escapeHtml(text);
+  html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  html = html.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+    const safe = safeUrl(url);
+    if (!safe) return "";
+    const altText = escapeHtml(alt || "博客图片");
+    return `<img src="${escapeHtml(safe)}" alt="${altText}" loading="lazy" decoding="async" referrerpolicy="no-referrer" class="blog-image" />`;
+  });
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+    const safe = safeUrl(url);
+    if (!safe) return escapeHtml(label);
+    return `<a href="${escapeHtml(safe)}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`;
+  });
+  return html;
+};
 
-const activeContentBlocks = computed(() => {
-  const lines = Array.isArray(activePost.value?.content) ? activePost.value.content : [];
-  return lines
-    .map((raw, idx) => {
-      const text = String(raw || "").trim();
-      if (!text) return null;
-      const markdownMatched = text.match(markdownImagePattern);
-      if (markdownMatched) {
-        return normalizeImageBlock(markdownMatched[2], markdownMatched[1], idx);
+const renderMarkdown = (markdown) => {
+  const src = String(markdown || "").replaceAll("\r\n", "\n");
+  const lines = src.split("\n");
+  const html = [];
+  let inCode = false;
+  let codeLines = [];
+  let listType = "";
+  let tableHead = null;
+  let tableRows = [];
+
+  const closeList = () => {
+    if (!listType) return;
+    html.push(listType === "ol" ? "</ol>" : "</ul>");
+    listType = "";
+  };
+  const flushTable = () => {
+    if (!tableHead) return;
+    const headHtml = `<thead><tr>${tableHead.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("")}</tr></thead>`;
+    const bodyHtml = tableRows.length
+      ? `<tbody>${tableRows.map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`).join("")}</tbody>`
+      : "";
+    html.push(`<table>${headHtml}${bodyHtml}</table>`);
+    tableHead = null;
+    tableRows = [];
+  };
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const rawLine = lines[i];
+    const line = String(rawLine || "");
+    const trim = line.trim();
+    if (trim.startsWith("```")) {
+      closeList();
+      flushTable();
+      if (!inCode) {
+        inCode = true;
+        codeLines = [];
+      } else {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        inCode = false;
       }
-      if (isLikelyImageUrl(text)) {
-        return normalizeImageBlock(text, "", idx);
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+    if (!trim) {
+      closeList();
+      flushTable();
+      continue;
+    }
+    const heading = trim.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      flushTable();
+      const level = heading[1].length;
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    if (trim === "---" || trim === "***" || trim === "___") {
+      closeList();
+      flushTable();
+      html.push("<hr />");
+      continue;
+    }
+    const ul = trim.match(/^[-*+]\s+(.+)$/);
+    if (ul) {
+      flushTable();
+      if (listType !== "ul") {
+        closeList();
+        html.push("<ul>");
+        listType = "ul";
       }
-      return { type: "text", key: `txt-${idx}`, text };
-    })
-    .filter(Boolean);
+      const task = ul[1].match(/^\[( |x|X)\]\s+(.+)$/);
+      if (task) {
+        const checked = task[1].toLowerCase() === "x";
+        html.push(`<li><input type="checkbox" disabled ${checked ? "checked" : ""} /> ${renderInlineMarkdown(task[2])}</li>`);
+      } else {
+        html.push(`<li>${renderInlineMarkdown(ul[1])}</li>`);
+      }
+      continue;
+    }
+    const ol = trim.match(/^\d+\.\s+(.+)$/);
+    if (ol) {
+      flushTable();
+      if (listType !== "ol") {
+        closeList();
+        html.push("<ol>");
+        listType = "ol";
+      }
+      html.push(`<li>${renderInlineMarkdown(ol[1])}</li>`);
+      continue;
+    }
+    if (trim.startsWith(">")) {
+      closeList();
+      flushTable();
+      html.push(`<blockquote>${renderInlineMarkdown(trim.replace(/^>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+
+    const isTableLine = trim.includes("|");
+    if (isTableLine) {
+      const cells = trim
+        .split("|")
+        .map((v) => v.trim())
+        .filter((_, idx, arr) => !(idx === 0 && arr[idx] === "") && !(idx === arr.length - 1 && arr[idx] === ""));
+      const next = String(lines[i + 1] || "").trim();
+      const isAlignLine = /^[:\-|\s]+$/.test(next) && next.includes("-");
+      if (!tableHead && cells.length > 0 && isAlignLine) {
+        closeList();
+        tableHead = cells;
+        i += 1;
+        continue;
+      }
+      if (tableHead && cells.length > 0) {
+        closeList();
+        tableRows.push(cells);
+        continue;
+      }
+    }
+
+    closeList();
+    flushTable();
+    html.push(`<p>${renderInlineMarkdown(trim)}</p>`);
+  }
+
+  if (inCode) {
+    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+  closeList();
+  flushTable();
+  return html.join("");
+};
+
+const activeContentHtml = computed(() => {
+  if (!activePost.value) return "";
+  const markdown =
+    typeof activePost.value.content_md === "string"
+      ? activePost.value.content_md
+      : Array.isArray(activePost.value.content)
+        ? activePost.value.content.join("\n")
+        : "";
+  return renderMarkdown(markdown);
 });
 
 const readPostFromQuery = () => {
@@ -510,38 +659,11 @@ onBeforeUnmount(() => {
           >
             正在加载全文...
           </p>
-          <template v-for="(block, idx) in activeContentBlocks" :key="block.key">
-            <p
-              v-if="block.type === 'text'"
-              class="text-sm leading-relaxed blog-content-item"
-              :style="{ '--content-delay': `${idx * 70}ms` }"
-              :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
-            >
-              {{ block.text }}
-            </p>
-            <figure
-              v-else
-              class="blog-figure blog-content-item"
-              :style="{ '--content-delay': `${idx * 70}ms` }"
-              :class="isNight ? 'blog-figure-night' : ''"
-            >
-              <img
-                :src="block.url"
-                :alt="block.alt"
-                loading="lazy"
-                decoding="async"
-                referrerpolicy="no-referrer"
-                class="blog-image"
-              />
-              <figcaption
-                v-if="block.alt && block.alt !== '博客图片'"
-                class="blog-caption"
-                :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
-              >
-                {{ block.alt }}
-              </figcaption>
-            </figure>
-          </template>
+          <div
+            class="blog-markdown text-sm leading-relaxed"
+            :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
+            v-html="activeContentHtml"
+          ></div>
         </div>
       </section>
 
@@ -731,32 +853,124 @@ onBeforeUnmount(() => {
   }
 }
 
-.blog-content-item {
-  opacity: 0;
-  transform: translateY(8px);
-  animation: blogContentIn 0.38s ease forwards;
-  animation-delay: var(--content-delay, 0ms);
+.blog-markdown > * {
+  margin: 0.7em 0;
 }
 
-@keyframes blogContentIn {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.blog-markdown h1,
+.blog-markdown h2,
+.blog-markdown h3,
+.blog-markdown h4,
+.blog-markdown h5,
+.blog-markdown h6 {
+  margin-top: 1em;
+  margin-bottom: 0.45em;
+  line-height: 1.3;
+  color: inherit;
 }
 
-.blog-figure {
-  margin: 0;
-  overflow: hidden;
-  border: 1px solid rgba(233, 217, 234, 0.9);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 12px 28px rgba(47, 20, 47, 0.1);
+.blog-markdown h1 { font-size: 1.65rem; }
+.blog-markdown h2 { font-size: 1.45rem; }
+.blog-markdown h3 { font-size: 1.25rem; }
+
+.blog-markdown ul,
+.blog-markdown ol {
+  margin: 0.75em 0;
+  padding-left: 1.35em;
 }
 
-.blog-figure-night {
-  border-color: rgba(74, 64, 110, 0.82);
-  background: rgba(35, 28, 58, 0.82);
+.blog-markdown li {
+  margin: 0.3em 0;
+}
+
+.blog-markdown li input[type="checkbox"] {
+  margin-right: 0.45em;
+  transform: translateY(1px);
+}
+
+.blog-markdown blockquote {
+  margin: 0.9em 0;
+  padding: 0.55em 0.85em;
+  border-left: 3px solid rgba(255, 122, 182, 0.55);
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 10px;
+}
+
+.meow-night .blog-markdown blockquote {
+  border-left-color: rgba(136, 243, 255, 0.45);
+  background: rgba(40, 33, 66, 0.72);
+}
+
+.blog-markdown pre {
+  margin: 0.9em 0;
+  padding: 0.8em 0.95em;
+  border-radius: 12px;
+  background: rgba(31, 25, 53, 0.92);
+  color: #ece8ff;
+  overflow-x: auto;
+}
+
+.blog-markdown code {
+  padding: 0.1em 0.35em;
+  border-radius: 7px;
+  background: rgba(47, 20, 47, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.meow-night .blog-markdown code {
+  background: rgba(136, 243, 255, 0.12);
+}
+
+.blog-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.blog-markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.blog-markdown del {
+  opacity: 0.75;
+}
+
+.blog-markdown hr {
+  border: 0;
+  border-top: 1px solid rgba(207, 178, 203, 0.75);
+  margin: 1em 0;
+}
+
+.meow-night .blog-markdown hr {
+  border-top-color: rgba(96, 88, 139, 0.7);
+}
+
+.blog-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.9em 0;
+}
+
+.blog-markdown th,
+.blog-markdown td {
+  border: 1px solid rgba(223, 203, 222, 0.9);
+  padding: 0.45em 0.55em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.blog-markdown th {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.meow-night .blog-markdown th,
+.meow-night .blog-markdown td {
+  border-color: rgba(84, 77, 126, 0.9);
+}
+
+.meow-night .blog-markdown th {
+  background: rgba(33, 28, 57, 0.88);
 }
 
 .blog-image {
@@ -764,18 +978,9 @@ onBeforeUnmount(() => {
   width: 100%;
   max-height: min(68vh, 560px);
   object-fit: contain;
+  border: 1px solid rgba(233, 217, 234, 0.9);
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.45);
-  transition: transform 0.45s ease, filter 0.45s ease;
-}
-
-.blog-figure:hover .blog-image {
-  transform: scale(1.015);
-  filter: saturate(1.04);
-}
-
-.blog-caption {
-  padding: 8px 12px 10px;
-  font-size: 12px;
-  line-height: 1.5;
+  margin: 0.85em 0;
 }
 </style>

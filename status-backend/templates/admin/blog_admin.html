@@ -50,6 +50,73 @@
       .item-note {
         margin-top: 10px;
       }
+      .editor-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      .preview {
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        background: rgba(255, 255, 255, 0.78);
+        padding: 10px 12px;
+        min-height: 120px;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .preview > * {
+        margin: 0.65em 0;
+      }
+      .preview h1, .preview h2, .preview h3, .preview h4 {
+        margin-top: 0.9em;
+        margin-bottom: 0.45em;
+        line-height: 1.35;
+      }
+      .preview h1 { font-size: 1.45em; }
+      .preview h2 { font-size: 1.28em; }
+      .preview h3 { font-size: 1.14em; }
+      .preview ul, .preview ol {
+        padding-left: 1.35em;
+      }
+      .preview blockquote {
+        border-left: 3px solid #d28db9;
+        background: rgba(245, 230, 240, 0.55);
+        border-radius: 8px;
+        padding: 6px 10px;
+      }
+      .preview pre {
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: #21162f;
+        color: #efe7ff;
+        overflow-x: auto;
+      }
+      .preview code {
+        border-radius: 6px;
+        padding: 1px 4px;
+        background: rgba(104, 70, 95, 0.12);
+      }
+      .preview pre code {
+        background: transparent;
+        padding: 0;
+      }
+      .preview table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      .preview th,
+      .preview td {
+        border: 1px solid #e8d8e7;
+        padding: 6px 8px;
+        text-align: left;
+      }
+      .preview img {
+        display: block;
+        max-width: 100%;
+        max-height: 360px;
+        border-radius: 10px;
+        border: 1px solid #eadbea;
+      }
       .hint {
         margin-top: 8px;
       }
@@ -82,7 +149,7 @@
             <button id="save">保存</button>
           </div>
           <div class="list" id="list"></div>
-          <div class="hint">提示：标题/日期必填。标签可用逗号分隔（如：碎碎念,开发,偶然）；正文每行一段，图片可用 ![说明](图片URL) 或直接填图片 URL。</div>
+          <div class="hint">提示：标题/日期必填。标签可用逗号分隔（如：碎碎念,开发,偶然）；正文支持 Markdown（标题、列表、代码块、图片、链接等）。</div>
           <div class="status" id="status"></div>
         </div>
       </div>
@@ -135,14 +202,192 @@
             <textarea data-excerpt placeholder="列表展示摘要">${esc(item.excerpt || "")}</textarea>
           </div>
           <div class="item-note">
-            <label>正文（每行一段）</label>
-            <textarea data-content placeholder="第一段&#10;![配图说明](https://example.com/pic.jpg)&#10;或直接图片链接 https://example.com/pic.jpg">${esc((item.content || []).join("\n"))}</textarea>
+            <label>正文（Markdown）</label>
+            <div class="editor-grid">
+              <textarea data-content placeholder="# 标题&#10;&#10;正文段落...&#10;&#10;```rust&#10;fn main() {}&#10;```&#10;&#10;![配图说明](https://example.com/pic.jpg)">${esc(item.content_md || (item.content || []).join("\n"))}</textarea>
+              <div class="preview" data-preview></div>
+            </div>
           </div>
         `;
+        const contentEl = wrap.querySelector("[data-content]");
+        const previewEl = wrap.querySelector("[data-preview]");
+        const renderPreview = () => {
+          previewEl.innerHTML = renderMarkdown(contentEl.value);
+        };
+        contentEl.addEventListener("input", renderPreview);
+        renderPreview();
         wrap.querySelector("[data-remove]").addEventListener("click", () => {
           wrap.remove();
         });
         return wrap;
+      };
+
+      const safeUrl = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        if (raw.startsWith("/") || raw.startsWith("./") || raw.startsWith("../") || raw.startsWith("#")) {
+          return raw;
+        }
+        try {
+          const parsed = new URL(raw);
+          return ["http:", "https:", "mailto:"].includes(parsed.protocol) ? raw : "";
+        } catch {
+          return "";
+        }
+      };
+
+      const renderInlineMarkdown = (text) => {
+        let html = esc(text);
+        html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
+        html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+        html = html.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+        html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+          const safe = safeUrl(url);
+          if (!safe) return "";
+          return `<img src="${esc(safe)}" alt="${esc(alt || "博客图片")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />`;
+        });
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+          const safe = safeUrl(url);
+          if (!safe) return esc(label);
+          return `<a href="${esc(safe)}" target="_blank" rel="noreferrer noopener">${esc(label)}</a>`;
+        });
+        return html;
+      };
+
+      const renderMarkdown = (markdown) => {
+        const src = String(markdown || "").replaceAll("\r\n", "\n");
+        const lines = src.split("\n");
+        const html = [];
+        let inCode = false;
+        let codeLines = [];
+        let listType = "";
+        let tableHead = null;
+        let tableRows = [];
+
+        const closeList = () => {
+          if (!listType) return;
+          html.push(listType === "ol" ? "</ol>" : "</ul>");
+          listType = "";
+        };
+        const flushTable = () => {
+          if (!tableHead) return;
+          const headHtml = `<thead><tr>${tableHead.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("")}</tr></thead>`;
+          const bodyHtml = tableRows.length
+            ? `<tbody>${tableRows.map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`).join("")}</tbody>`
+            : "";
+          html.push(`<table>${headHtml}${bodyHtml}</table>`);
+          tableHead = null;
+          tableRows = [];
+        };
+
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = String(lines[i] || "");
+          const trim = line.trim();
+
+          if (trim.startsWith("```")) {
+            closeList();
+            flushTable();
+            if (!inCode) {
+              inCode = true;
+              codeLines = [];
+            } else {
+              html.push(`<pre><code>${esc(codeLines.join("\n"))}</code></pre>`);
+              inCode = false;
+            }
+            continue;
+          }
+          if (inCode) {
+            codeLines.push(line);
+            continue;
+          }
+          if (!trim) {
+            closeList();
+            flushTable();
+            continue;
+          }
+
+          const heading = trim.match(/^(#{1,6})\s+(.+)$/);
+          if (heading) {
+            closeList();
+            flushTable();
+            const lv = heading[1].length;
+            html.push(`<h${lv}>${renderInlineMarkdown(heading[2])}</h${lv}>`);
+            continue;
+          }
+          if (trim === "---" || trim === "***" || trim === "___") {
+            closeList();
+            flushTable();
+            html.push("<hr />");
+            continue;
+          }
+          const ul = trim.match(/^[-*+]\s+(.+)$/);
+          if (ul) {
+            flushTable();
+            if (listType !== "ul") {
+              closeList();
+              html.push("<ul>");
+              listType = "ul";
+            }
+            const task = ul[1].match(/^\[( |x|X)\]\s+(.+)$/);
+            if (task) {
+              const checked = task[1].toLowerCase() === "x";
+              html.push(`<li><input type="checkbox" disabled ${checked ? "checked" : ""} /> ${renderInlineMarkdown(task[2])}</li>`);
+            } else {
+              html.push(`<li>${renderInlineMarkdown(ul[1])}</li>`);
+            }
+            continue;
+          }
+          const ol = trim.match(/^\d+\.\s+(.+)$/);
+          if (ol) {
+            flushTable();
+            if (listType !== "ol") {
+              closeList();
+              html.push("<ol>");
+              listType = "ol";
+            }
+            html.push(`<li>${renderInlineMarkdown(ol[1])}</li>`);
+            continue;
+          }
+          if (trim.startsWith(">")) {
+            closeList();
+            flushTable();
+            html.push(`<blockquote>${renderInlineMarkdown(trim.replace(/^>\s?/, ""))}</blockquote>`);
+            continue;
+          }
+
+          const isTableLine = trim.includes("|");
+          if (isTableLine) {
+            const cells = trim
+              .split("|")
+              .map((v) => v.trim())
+              .filter((_, idx, arr) => !(idx === 0 && arr[idx] === "") && !(idx === arr.length - 1 && arr[idx] === ""));
+            const next = String(lines[i + 1] || "").trim();
+            const isAlignLine = /^[:\-|\s]+$/.test(next) && next.includes("-");
+            if (!tableHead && cells.length > 0 && isAlignLine) {
+              closeList();
+              tableHead = cells;
+              i += 1;
+              continue;
+            }
+            if (tableHead && cells.length > 0) {
+              closeList();
+              tableRows.push(cells);
+              continue;
+            }
+          }
+
+          closeList();
+          flushTable();
+          html.push(`<p>${renderInlineMarkdown(trim)}</p>`);
+        }
+
+        if (inCode) {
+          html.push(`<pre><code>${esc(codeLines.join("\n"))}</code></pre>`);
+        }
+        closeList();
+        flushTable();
+        return html.join("");
       };
 
       const readItems = () => {
@@ -155,12 +400,8 @@
           const tag = el.querySelector("[data-tag]").value.trim();
           const excerpt = el.querySelector("[data-excerpt]").value.trim();
           const sortRaw = el.querySelector("[data-sort]").value.trim();
-          const content = el
-            .querySelector("[data-content]")
-            .value
-            .split("\n")
-            .map((v) => v.trim())
-            .filter(Boolean);
+          const rawContent = el.querySelector("[data-content]").value.replaceAll("\r\n", "\n");
+          const content = rawContent.split("\n");
           items.push({
             slug: slug || undefined,
             title,
@@ -168,6 +409,7 @@
             tag: tag || undefined,
             excerpt: excerpt || undefined,
             content,
+            content_md: rawContent,
             sort_order: sortRaw === "" ? idx : Number(sortRaw)
           });
         });

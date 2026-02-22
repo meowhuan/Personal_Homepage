@@ -47,5 +47,17 @@ STATUS_TOKEN=your_token
 - `POST /blog` (需要 token 鉴权)
 - `GET /blog/admin` (简易管理页面)
 
+`/blog` 正文字段支持两种写法（兼容）：
+- `content_md`: Markdown 原文（推荐）
+- `content`: 字符串数组（旧格式，仍可用）
+
+当前 Markdown 渲染支持（管理页预览 + 前台详情页）：
+- 标题、段落、粗体、斜体、删除线、行内代码
+- 代码块（```）
+- 无序/有序列表、任务列表（`- [ ]` / `- [x]`）
+- 引用（`>`）、分隔线（`---` / `***` / `___`）
+- 链接、图片
+- 简单表格（`|` 语法）
+
 说明：删除接口为 `GET`，需要 `id` 与 `token`。`/schedule`、`/blog`、`/device/status`、`/status/manual` 的更新接口需在请求头中携带 `x-token` 或 `authorization: Bearer TOKEN`。全局手动离线开启后，`/heartbeat` 会直接返回 `200` 且不更新设备状态。
 Note: delete API is `GET` and requires `id` and `token`.
