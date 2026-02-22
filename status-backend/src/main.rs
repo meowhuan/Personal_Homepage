@@ -176,7 +176,7 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(7999);
     let build_version =
-        std::env::var("STATUS_BUILD").unwrap_or_else(|_| "status-backend v1.1-music".to_string());
+        std::env::var("STATUS_BUILD").unwrap_or_else(|_| "status-backend v1.2-music".to_string());
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(

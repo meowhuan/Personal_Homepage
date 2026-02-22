@@ -204,7 +204,7 @@
           <div class="item-note">
             <label>正文（Markdown）</label>
             <div class="editor-grid">
-              <textarea data-content placeholder="# 标题&#10;&#10;正文段落...&#10;&#10;```rust&#10;fn main() {}&#10;```&#10;&#10;![配图说明](https://example.com/pic.jpg)">${esc(item.content_md || (item.content || []).join("\n"))}</textarea>
+              <textarea data-content placeholder="# 标题&#10;&#10;正文段落...&#10;&#10;代码块示例：请使用三个反引号包裹代码&#10;&#10;![配图说明](https://example.com/pic.jpg)">${esc(item.content_md || (item.content || []).join("\n"))}</textarea>
               <div class="preview" data-preview></div>
             </div>
           </div>
