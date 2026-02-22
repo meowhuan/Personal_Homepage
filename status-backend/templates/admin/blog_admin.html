@@ -33,6 +33,9 @@
         background: rgba(255, 255, 255, 0.7);
         padding: 12px;
       }
+      .item.collapsed .item-body {
+        display: none;
+      }
       .item-header {
         display: flex;
         align-items: center;
@@ -41,6 +44,30 @@
         margin-bottom: 8px;
         font-size: 12px;
         color: #7b6b7a;
+      }
+      .item-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .item-toggle {
+        width: 24px;
+        height: 24px;
+        border: 1px solid #e3cfe2;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+        cursor: pointer;
+        user-select: none;
+      }
+      .item.collapsed .item-toggle {
+        transform: rotate(-90deg);
+      }
+      .item-meta {
+        color: #8b7889;
+        font-size: 12px;
       }
       .item-grid {
         display: grid;
@@ -167,14 +194,24 @@
         .replaceAll(">", "&gt;")
         .replaceAll("\"", "&quot;");
 
-      const createItem = (item = {}) => {
+      const createItem = (item = {}, expanded = false) => {
         const wrap = document.createElement("div");
-        wrap.className = "item";
+        wrap.className = `item ${expanded ? "" : "collapsed"}`.trim();
+        const title = (item.title || "").trim() || "未命名文章";
+        const date = (item.date || "").trim() || "无日期";
         wrap.innerHTML = `
           <div class="item-header">
-            <span>博客文章</span>
-            <button class="danger" data-remove>删除</button>
+            <div class="item-title">
+              <span class="item-toggle" data-toggle>▾</span>
+              <strong>${esc(title)}</strong>
+              <span class="item-meta">${esc(date)}</span>
+            </div>
+            <div>
+              <button class="ghost" data-toggle-text>${expanded ? "折叠" : "展开"}</button>
+              <button class="danger" data-remove>删除</button>
+            </div>
           </div>
+          <div class="item-body">
           <div class="item-grid">
             <div>
               <label>Slug</label>
@@ -208,7 +245,15 @@
               <div class="preview" data-preview></div>
             </div>
           </div>
+          </div>
         `;
+        const toggle = () => {
+          wrap.classList.toggle("collapsed");
+          const btn = wrap.querySelector("[data-toggle-text]");
+          btn.textContent = wrap.classList.contains("collapsed") ? "展开" : "折叠";
+        };
+        wrap.querySelector("[data-toggle]").addEventListener("click", toggle);
+        wrap.querySelector("[data-toggle-text]").addEventListener("click", toggle);
         const contentEl = wrap.querySelector("[data-content]");
         const previewEl = wrap.querySelector("[data-preview]");
         const renderPreview = () => {
@@ -216,6 +261,16 @@
         };
         contentEl.addEventListener("input", renderPreview);
         renderPreview();
+        const titleEl = wrap.querySelector("[data-title]");
+        const dateEl = wrap.querySelector("[data-date]");
+        const titleTextEl = wrap.querySelector(".item-title strong");
+        const dateTextEl = wrap.querySelector(".item-meta");
+        titleEl.addEventListener("input", () => {
+          titleTextEl.textContent = titleEl.value.trim() || "未命名文章";
+        });
+        dateEl.addEventListener("input", () => {
+          dateTextEl.textContent = dateEl.value.trim() || "无日期";
+        });
         wrap.querySelector("[data-remove]").addEventListener("click", () => {
           wrap.remove();
         });
@@ -433,9 +488,9 @@
           });
           const items = await Promise.all(detailTasks);
           listEl.innerHTML = "";
-          items.forEach((item) => listEl.appendChild(createItem(item)));
+          items.forEach((item) => listEl.appendChild(createItem(item, false)));
           if (items.length === 0) {
-            listEl.appendChild(createItem());
+            listEl.appendChild(createItem({}, true));
           }
           setStatus("已加载");
         } catch (err) {
@@ -462,7 +517,7 @@
       };
 
       document.getElementById("add").addEventListener("click", () => {
-        listEl.appendChild(createItem());
+        listEl.appendChild(createItem({}, true));
       });
       document.getElementById("load").addEventListener("click", loadBlog);
       document.getElementById("save").addEventListener("click", saveBlog);
