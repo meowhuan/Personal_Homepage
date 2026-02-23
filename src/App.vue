@@ -5,6 +5,9 @@ const {
   time,
   date,
   calendar,
+  hrtCountdownText,
+  hrtDateLabel,
+  siteUptimeText,
   isNight,
   showIntro,
   quoteText,
@@ -157,6 +160,9 @@ const {
               <div class="text-[11px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">本地时间</div>
               <div class="text-lg font-700" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">{{ time }}</div>
               <div class="text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">日期 {{ calendar.month }}/{{ calendar.day }}</div>
+              <div class="mt-1 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                HRT {{ hrtDateLabel }} · {{ hrtCountdownText }}
+              </div>
             </div>
           </div>
         </div>
@@ -589,6 +595,15 @@ const {
               >
                 <div class="text-[10px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">总计</div>
                 <div class="mt-1 text-3xl font-700">{{ visitorCount }}</div>
+              </div>
+              <div
+                class="paw-card rounded-[20px] border px-3 py-2 sm:col-span-3"
+                :class="isNight
+                  ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink'
+                  : 'border-meow-line bg-white/70 text-meow-ink'"
+              >
+                <div class="text-[10px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">网站运行</div>
+                <div class="mt-1 text-sm font-700">{{ siteUptimeText }}</div>
               </div>
             </div>
           </div>

@@ -7,6 +7,8 @@ const VISITOR_URL = "https://m.ratf.cn/visitor";
 const VISITOR_VISIT_URL = "https://m.ratf.cn/visitor/visit";
 const VISITOR_ID_KEY = "meow-visitor-id";
 const QUOTE_FALLBACK = "今天也要温柔一点。";
+const HRT_TARGET_DATE = "2026-01-16T00:00:00+08:00";
+const SITE_STARTED_AT = "2026-02-06T19:56:27+08:00";
 
 function createThemeUrl(isNight) {
   const suffix = `?v=${Date.now()}`;
@@ -20,6 +22,9 @@ export function useHomepageState() {
   const time = ref("");
   const date = ref("");
   const calendar = ref({ day: "", month: "", weekday: "" });
+  const hrtCountdownText = ref("");
+  const hrtDateLabel = "2026.01.16";
+  const siteUptimeText = ref("");
   const isNight = ref(false);
   const showIntro = ref(true);
 
@@ -116,6 +121,28 @@ export function useHomepageState() {
       month: now.toLocaleDateString("zh-CN", { month: "2-digit" }),
       weekday: now.toLocaleDateString("zh-CN", { weekday: "short" })
     };
+
+    const hrtTargetDate = new Date(HRT_TARGET_DATE);
+    const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const targetDay = new Date(
+      hrtTargetDate.getFullYear(),
+      hrtTargetDate.getMonth(),
+      hrtTargetDate.getDate()
+    );
+    const dayDiff = Math.floor((targetDay.getTime() - nowDay.getTime()) / (24 * 60 * 60 * 1000));
+    if (dayDiff > 0) {
+      hrtCountdownText.value = `还有 ${dayDiff + 1} 天`;
+    } else {
+      hrtCountdownText.value = `已进行第 ${Math.abs(dayDiff) + 1} 天`;
+    }
+
+    const siteStartedTime = new Date(SITE_STARTED_AT).getTime();
+    const uptimeSeconds = Math.max(0, Math.floor((now.getTime() - siteStartedTime) / 1000));
+    const days = Math.floor(uptimeSeconds / 86400);
+    const hours = Math.floor((uptimeSeconds % 86400) / 3600);
+    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+    const seconds = uptimeSeconds % 60;
+    siteUptimeText.value = `${days}天 ${String(hours).padStart(2, "0")}时 ${String(minutes).padStart(2, "0")}分 ${String(seconds).padStart(2, "0")}秒`;
   };
 
   const canFetchQuote = () => Date.now() >= nextQuoteAt.value;
@@ -338,6 +365,9 @@ export function useHomepageState() {
     time,
     date,
     calendar,
+    hrtCountdownText,
+    hrtDateLabel,
+    siteUptimeText,
     isNight,
     showIntro,
     quoteText,
