@@ -117,7 +117,7 @@ const {
 
         <div class="mt-6 grid gap-4 md:grid-cols-[1fr_auto] md:items-stretch">
           <div
-            class="meow-card motion-card flex h-full min-h-[96px] items-start gap-3 rounded-3xl px-5 py-4 text-xs backdrop-blur"
+            class="meow-card motion-card flex h-full min-h-[88px] items-start gap-3 rounded-3xl px-5 py-4 text-xs backdrop-blur"
             style="--float-delay: 0.2s"
             :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line text-meow-night-soft' : 'text-meow-soft'"
           >
@@ -125,8 +125,12 @@ const {
             <div class="flex-1 leading-tight">
               <div class="text-[11px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">今日一句</div>
               <div class="mt-1 text-sm font-600" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">{{ quoteText }}</div>
-              <div class="mt-1 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                {{ quoteFrom || (quoteError ? "暂时无法获取" : " ") }}
+              <div
+                v-if="quoteFrom || quoteError"
+                class="mt-2 text-[11px]"
+                :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'"
+              >
+                {{ quoteFrom || "暂时无法获取" }}
               </div>
             </div>
             <button
