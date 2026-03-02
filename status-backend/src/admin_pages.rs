@@ -17,6 +17,10 @@ pub async fn blog_admin_page() -> impl IntoResponse {
     Html(include_str!("../templates/admin/blog_admin.html"))
 }
 
+pub async fn links_admin_page() -> impl IntoResponse {
+    Html(include_str!("../templates/admin/links_admin.html"))
+}
+
 pub async fn admin_common_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],

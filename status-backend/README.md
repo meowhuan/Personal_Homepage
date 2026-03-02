@@ -23,6 +23,15 @@ cargo run
 - `STATUS_PORT` (default `7999`)
 - `STATUS_DB` (default `status.db`)
 - `STATUS_TOKEN` (set in `.env`)
+- `LINK_TG_BOT_TOKEN` (optional, Telegram Bot Token)
+- `LINK_TG_CHAT_ID` (optional, Telegram chat/user id)
+- `LINK_SMTP_HOST` (optional, SMTP host)
+- `LINK_SMTP_PORT` (optional, default `587`)
+- `LINK_SMTP_USER` (optional, SMTP username)
+- `LINK_SMTP_PASS` (optional, SMTP password)
+- `LINK_SMTP_FROM` (optional, e.g. `bot@example.com`)
+- `LINK_SMTP_TO` (optional, receiver list separated by comma)
+- `LINK_SMTP_STARTTLS` (optional, default `true`, set `0`/`false` to disable)
 
 `.env` 示例 / Example:
 
@@ -46,6 +55,16 @@ STATUS_TOKEN=your_token
 - `GET /blog/:slug`
 - `POST /blog` (需要 token 鉴权)
 - `GET /blog/admin` (简易管理页面)
+- `GET /links` (公开友链列表)
+- `POST /links/apply` (友链申请，无需 token，支持 TG/SMTP 通知)
+- `GET /links/applications` (需要 token，申请列表)
+- `POST /links/review` (需要 token，审核通过/拒绝)
+- `POST /links/sort` (需要 token，更新已收录友链排序)
+- `POST /links/update` (需要 token，编辑单条友链)
+- `POST /links/delete` (需要 token，删除单条友链)
+- `GET /links/settings` (需要 token，读取 TG/SMTP 配置)
+- `POST /links/settings` (需要 token，保存 TG/SMTP 配置)
+- `GET /links/admin` (友链管理页面)
 
 `/blog` 正文字段支持两种写法（兼容）：
 - `content_md`: Markdown 原文（推荐）

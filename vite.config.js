@@ -10,7 +10,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         donate: resolve(__dirname, "donate.html"),
-        blog: resolve(__dirname, "blog.html")
+        blog: resolve(__dirname, "blog.html"),
+        friends: resolve(__dirname, "friends.html")
       }
     }
   }

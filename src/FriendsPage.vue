@@ -1,0 +1,471 @@
+<script setup>
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+
+const LINKS_API_BASE = "https://m.ratf.cn/links";
+const APPLY_API_URL = "https://m.ratf.cn/links/apply";
+
+const isNight = ref(false);
+const themeMedia = ref(null);
+const loading = ref(false);
+const error = ref(false);
+const links = ref([]);
+const submitLoading = ref(false);
+const submitError = ref("");
+const submitSuccess = ref("");
+
+const form = reactive({
+  site_name: "",
+  site_url: "",
+  avatar_url: "",
+  description: "",
+  email: "",
+  note: ""
+});
+
+const fallbackLinks = [
+  {
+    id: "fallback-1",
+    name: "Meowhuan Blog",
+    url: "https://meowra.cn",
+    avatar_url: "/logo.png",
+    description: "主页和博客内容站点。",
+    tags: "个人主页"
+  }
+];
+
+const normalizeUrl = (raw) => {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return `https://${value}`;
+};
+
+const resetForm = () => {
+  form.site_name = "";
+  form.site_url = "";
+  form.avatar_url = "";
+  form.description = "";
+  form.email = "";
+  form.note = "";
+};
+
+const onSystemThemeChange = (event) => {
+  if (localStorage.getItem("meow-theme")) return;
+  isNight.value = event.matches;
+};
+
+const toggleTheme = () => {
+  isNight.value = !isNight.value;
+  localStorage.setItem("meow-theme", isNight.value ? "night" : "day");
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
+    themeMedia.value = null;
+  }
+};
+
+const fetchLinks = async () => {
+  loading.value = true;
+  try {
+    const res = await fetch(LINKS_API_BASE);
+    if (!res.ok) throw new Error("links fetch failed");
+    const data = await res.json();
+    links.value = Array.isArray(data) ? data : [];
+    error.value = false;
+  } catch {
+    links.value = fallbackLinks;
+    error.value = true;
+  } finally {
+    loading.value = false;
+  }
+};
+
+const submitApply = async () => {
+  submitSuccess.value = "";
+  submitError.value = "";
+
+  const siteName = form.site_name.trim();
+  const siteUrl = normalizeUrl(form.site_url);
+  if (!siteName || !siteUrl) {
+    submitError.value = "请至少填写站点名称和站点地址。";
+    return;
+  }
+
+  submitLoading.value = true;
+  try {
+    const res = await fetch(APPLY_API_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        site_name: siteName,
+        site_url: siteUrl,
+        avatar_url: normalizeUrl(form.avatar_url),
+        description: form.description.trim(),
+        email: form.email.trim(),
+        note: form.note.trim()
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.message || "提交失败，请稍后再试。");
+    }
+    submitSuccess.value = data?.message || "申请已提交，感谢喵喵投递。";
+    resetForm();
+  } catch (err) {
+    submitError.value = err instanceof Error ? err.message : "提交失败，请稍后再试。";
+  } finally {
+    submitLoading.value = false;
+  }
+};
+
+const splitTags = (tagValue) =>
+  String(tagValue || "")
+    .split(/[,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const shownLinks = computed(() => links.value);
+
+onMounted(() => {
+  const savedTheme = localStorage.getItem("meow-theme");
+  if (savedTheme) {
+    isNight.value = savedTheme === "night";
+  } else if (window.matchMedia) {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    isNight.value = media.matches;
+    themeMedia.value = media;
+    media.addEventListener("change", onSystemThemeChange);
+  }
+  fetchLinks();
+});
+
+onBeforeUnmount(() => {
+  if (themeMedia.value) {
+    themeMedia.value.removeEventListener("change", onSystemThemeChange);
+  }
+});
+</script>
+
+<template>
+  <div
+    class="min-h-screen font-body transition-colors duration-700 ease-in-out meow-bg page-fade"
+    :class="isNight
+      ? 'bg-gradient-to-br from-meow-night-bg via-[#201a3f] to-[#16162a] text-meow-night-ink meow-night'
+      : 'bg-gradient-to-br from-meow-bg via-[#fff6fb] to-[#f2f0ff] text-meow-ink meow-day'"
+  >
+    <main class="relative mx-auto w-[min(1040px,92vw)] py-10">
+      <button
+        class="cord-switch"
+        type="button"
+        @click="toggleTheme"
+        :class="isNight ? 'cord-switch-night' : 'cord-switch-day'"
+        aria-label="切换深夜模式"
+      >
+        <span class="cord-line"></span>
+        <span class="cord-knob">{{ isNight ? "🌙" : "☀️" }}</span>
+        <span class="cord-label" aria-hidden="true"></span>
+      </button>
+
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 class="font-display text-3xl sm:text-4xl">喵喵友链</h1>
+          <p class="mt-2 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+            收录友站，也欢迎提交友链申请。
+          </p>
+        </div>
+        <div class="flex gap-2">
+          <a
+            href="/"
+            class="meow-btn-ghost"
+            :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+          >
+            返回主页
+          </a>
+          <a
+            href="/blog.html"
+            class="meow-btn-ghost"
+            :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+          >
+            博客
+          </a>
+        </div>
+      </div>
+
+      <section class="mt-8 grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
+        <div class="space-y-4">
+          <article
+            class="meow-card motion-card rounded-3xl p-5"
+            :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="font-display text-2xl">友站列表</h2>
+              <button
+                type="button"
+                class="meow-pill motion-press"
+                :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : ''"
+                @click="fetchLinks"
+              >
+                刷新
+              </button>
+            </div>
+            <p v-if="loading" class="mt-3 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">加载中...</p>
+            <p v-else-if="shownLinks.length === 0" class="mt-3 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">还没有收录友链。</p>
+            <p v-if="error" class="mt-3 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">后端暂不可用，显示的是占位数据。</p>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              <a
+                v-for="item in shownLinks"
+                :key="item.id"
+                :href="item.url"
+                target="_blank"
+                rel="noreferrer"
+                class="friend-card motion-press"
+                :class="isNight ? 'friend-card-night' : ''"
+              >
+                <img
+                  :src="item.avatar_url || '/logo.png'"
+                  :alt="`${item.name} avatar`"
+                  class="h-11 w-11 rounded-full border object-cover"
+                  :class="isNight ? 'border-meow-night-line' : 'border-meow-line'"
+                />
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-700">{{ item.name }}</div>
+                  <div class="mt-1 line-clamp-2 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                    {{ item.description || "这个站长很懒，还没写简介。" }}
+                  </div>
+                  <div class="mt-2 flex flex-wrap gap-1" v-if="splitTags(item.tags).length > 0">
+                    <span v-for="tag in splitTags(item.tags)" :key="`${item.id}-${tag}`" class="meow-pill text-[10px]">
+                      #{{ tag }}
+                    </span>
+                  </div>
+                </div>
+              </a>
+            </div>
+          </article>
+        </div>
+
+        <article
+          class="meow-card motion-card rounded-3xl p-5"
+          :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
+        >
+          <h2 class="font-display text-2xl">申请友链</h2>
+          <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+            请确保站点可访问，内容健康，且已添加本站后再提交申请。
+          </p>
+          <form class="mt-4 space-y-3" @submit.prevent="submitApply">
+            <input
+              v-model.trim="form.site_name"
+              type="text"
+              required
+              maxlength="64"
+              placeholder="站点名称 *"
+              class="meow-input"
+              :class="isNight ? 'meow-input-night' : ''"
+            />
+            <input
+              v-model.trim="form.site_url"
+              type="text"
+              required
+              maxlength="255"
+              placeholder="站点地址 * (https://...)"
+              class="meow-input"
+              :class="isNight ? 'meow-input-night' : ''"
+            />
+            <input
+              v-model.trim="form.avatar_url"
+              type="text"
+              maxlength="255"
+              placeholder="头像地址"
+              class="meow-input"
+              :class="isNight ? 'meow-input-night' : ''"
+            />
+            <input
+              v-model.trim="form.email"
+              type="email"
+              maxlength="128"
+              placeholder="联系邮箱"
+              class="meow-input"
+              :class="isNight ? 'meow-input-night' : ''"
+            />
+            <textarea
+              v-model.trim="form.description"
+              rows="3"
+              maxlength="280"
+              placeholder="站点简介"
+              class="meow-input resize-none"
+              :class="isNight ? 'meow-input-night' : ''"
+            ></textarea>
+            <textarea
+              v-model.trim="form.note"
+              rows="2"
+              maxlength="280"
+              placeholder="备注"
+              class="meow-input resize-none"
+              :class="isNight ? 'meow-input-night' : ''"
+            ></textarea>
+            <button
+              type="submit"
+              class="meow-btn-primary motion-press w-full"
+              :class="isNight ? 'bg-meow-night-accent text-meow-night-bg' : ''"
+              :disabled="submitLoading"
+            >
+              {{ submitLoading ? "提交中..." : "提交申请" }}
+            </button>
+          </form>
+          <p v-if="submitError" class="mt-3 text-xs text-[#e45883]">{{ submitError }}</p>
+          <p v-if="submitSuccess" class="mt-3 text-xs" :class="isNight ? 'text-meow-night-accent' : 'text-[#2f8f72]'">
+            {{ submitSuccess }}
+          </p>
+        </article>
+      </section>
+    </main>
+  </div>
+</template>
+
+<style>
+.page-fade {
+  animation: pageFade 0.72s cubic-bezier(0.22, 1.2, 0.36, 1) both;
+}
+
+@keyframes pageFade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.meow-bg {
+  position: relative;
+}
+
+.meow-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23bca6d9'%3E%3Ccircle cx='24' cy='24' r='6'/%3E%3Ccircle cx='44' cy='18' r='6'/%3E%3Ccircle cx='64' cy='24' r='6'/%3E%3Ccircle cx='32' cy='48' r='12'/%3E%3Ccircle cx='84' cy='84' r='6'/%3E%3Ccircle cx='104' cy='78' r='6'/%3E%3Ccircle cx='96' cy='56' r='6'/%3E%3Ccircle cx='88' cy='100' r='12'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 140px 140px;
+}
+
+.meow-bg.meow-night::before {
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml;utf8,%3Csvg width='120' height='120' viewBox='0 0 120 120' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%235a6bb8'%3E%3Ccircle cx='24' cy='24' r='6'/%3E%3Ccircle cx='44' cy='18' r='6'/%3E%3Ccircle cx='64' cy='24' r='6'/%3E%3Ccircle cx='32' cy='48' r='12'/%3E%3Ccircle cx='84' cy='84' r='6'/%3E%3Ccircle cx='104' cy='78' r='6'/%3E%3Ccircle cx='96' cy='56' r='6'/%3E%3Ccircle cx='88' cy='100' r='12'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.cord-switch {
+  position: fixed;
+  top: 4px;
+  right: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  z-index: 20;
+}
+
+.cord-line {
+  width: 2px;
+  height: 36px;
+  background: #e9d9ea;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.cord-knob {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #fff7fb;
+  color: #2b1d2a;
+  border: 1px solid #e9d9ea;
+  box-shadow: 0 8px 18px rgba(47, 20, 47, 0.12);
+}
+
+.cord-label {
+  height: 8px;
+}
+
+.cord-switch-night .cord-line {
+  background: #332b55;
+}
+
+.cord-switch-night .cord-knob {
+  background: #241f3d;
+  color: #f3e9ff;
+  border-color: #332b55;
+}
+
+.motion-card {
+  transition: transform 0.45s ease, box-shadow 0.45s ease;
+}
+
+.motion-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 16px 32px rgba(47, 20, 47, 0.14);
+}
+
+.motion-press {
+  transition: transform 0.2s ease;
+}
+
+.motion-press:hover {
+  transform: translateY(-2px);
+}
+
+.friend-card {
+  display: flex;
+  gap: 12px;
+  border: 1px solid rgba(233, 217, 234, 0.95);
+  border-radius: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  color: inherit;
+}
+
+.friend-card-night {
+  border-color: rgba(74, 64, 110, 0.9);
+  background: rgba(35, 28, 58, 0.85);
+}
+
+.meow-input {
+  width: 100%;
+  border: 1px solid rgba(233, 217, 234, 0.95);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #2b1d2a;
+  padding: 10px 12px;
+  font-size: 13px;
+  outline: none;
+}
+
+.meow-input:focus {
+  box-shadow: 0 0 0 3px rgba(255, 122, 182, 0.2);
+}
+
+.meow-input-night {
+  border-color: rgba(74, 64, 110, 0.9);
+  background: rgba(26, 23, 45, 0.85);
+  color: #f3e9ff;
+}
+
+.meow-input-night:focus {
+  box-shadow: 0 0 0 3px rgba(136, 243, 255, 0.18);
+}
+
+@media (max-width: 640px) {
+  .cord-switch {
+    right: 100px;
+  }
+}
+</style>

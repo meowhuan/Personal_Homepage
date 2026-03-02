@@ -7,8 +7,14 @@ use axum::{
     Json, Router,
 };
 use chrono::{Datelike, Utc};
+use lettre::{
+    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
+    AsyncTransport, Message, Tokio1Executor,
+};
+use reqwest::Url;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -21,6 +27,7 @@ use tracing_subscriber::EnvFilter;
 struct AppState {
     db: Arc<Mutex<Connection>>,
     token: String,
+    notifier: Arc<Notifier>,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +170,138 @@ struct VersionInfo {
     music_fields: bool,
 }
 
+#[derive(Serialize)]
+struct FriendLink {
+    id: String,
+    name: String,
+    url: String,
+    avatar_url: Option<String>,
+    description: Option<String>,
+    tags: Option<String>,
+    sort_order: i64,
+    created_at: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkApplyPayload {
+    site_name: String,
+    site_url: String,
+    avatar_url: Option<String>,
+    description: Option<String>,
+    email: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ApiMessage {
+    message: String,
+}
+
+#[derive(Serialize)]
+struct LinkApplication {
+    id: i64,
+    site_name: String,
+    site_url: String,
+    avatar_url: Option<String>,
+    description: Option<String>,
+    email: Option<String>,
+    note: Option<String>,
+    status: String,
+    ip: Option<String>,
+    user_agent: Option<String>,
+    review_note: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkReviewPayload {
+    application_id: i64,
+    action: String,
+    sort_order: Option<i64>,
+    tags: Option<String>,
+    review_note: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LinkSortPayload {
+    items: Vec<LinkSortItem>,
+}
+
+#[derive(Deserialize)]
+struct LinkSortItem {
+    id: String,
+    sort_order: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkUpdatePayload {
+    id: String,
+    name: String,
+    url: String,
+    avatar_url: Option<String>,
+    description: Option<String>,
+    tags: Option<String>,
+    sort_order: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct LinkDeletePayload {
+    id: String,
+}
+
+#[derive(Serialize)]
+struct LinkSettingsResponse {
+    tg_bot_token: Option<String>,
+    tg_chat_id: Option<String>,
+    smtp_host: Option<String>,
+    smtp_port: Option<u16>,
+    smtp_user: Option<String>,
+    smtp_pass_set: bool,
+    smtp_from: Option<String>,
+    smtp_to: Option<String>,
+    smtp_starttls: bool,
+}
+
+#[derive(Deserialize)]
+struct LinkSettingsPayload {
+    tg_bot_token: Option<String>,
+    tg_chat_id: Option<String>,
+    smtp_host: Option<String>,
+    smtp_port: Option<u16>,
+    smtp_user: Option<String>,
+    smtp_pass: Option<String>,
+    smtp_from: Option<String>,
+    smtp_to: Option<String>,
+    smtp_starttls: Option<bool>,
+}
+
+#[derive(Clone)]
+struct SmtpConfig {
+    host: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+    from: String,
+    to: Vec<String>,
+    use_starttls: bool,
+}
+
+#[derive(Clone)]
+struct Notifier {
+    http: reqwest::Client,
+    tg_bot_token: Option<String>,
+    tg_chat_id: Option<String>,
+    smtp: Option<SmtpConfig>,
+}
+
+#[derive(Clone)]
+struct RuntimeNotifyConfig {
+    tg_bot_token: Option<String>,
+    tg_chat_id: Option<String>,
+    smtp: Option<SmtpConfig>,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -177,6 +316,7 @@ async fn main() {
         .unwrap_or(7999);
     let build_version =
         std::env::var("STATUS_BUILD").unwrap_or_else(|_| "status-backend v1.2-music".to_string());
+    let notifier = Arc::new(Notifier::from_env());
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -223,6 +363,36 @@ async fn main() {
             content_md TEXT,
             sort_order INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS friend_links (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            avatar_url TEXT,
+            description TEXT,
+            tags TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS friend_link_applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_name TEXT NOT NULL,
+            site_url TEXT NOT NULL,
+            avatar_url TEXT,
+            description TEXT,
+            email TEXT,
+            note TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            ip TEXT,
+            user_agent TEXT,
+            review_note TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS friend_link_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
         );",
     )
     .expect("init db");
@@ -240,6 +410,10 @@ async fn main() {
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_updated_at INTEGER", []);
     let _ = conn.execute("ALTER TABLE blog_posts ADD COLUMN content_md TEXT", []);
     let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN review_note TEXT",
+        [],
+    );
+    let _ = conn.execute(
         "INSERT INTO status_control (id, global_manual_offline, updated_at)
          VALUES (1, 0, ?1)
          ON CONFLICT(id) DO NOTHING",
@@ -249,6 +423,7 @@ async fn main() {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         token,
+        notifier,
     };
 
     let cors = CorsLayer::new()
@@ -286,6 +461,15 @@ async fn main() {
         .route("/blog", get(blog_list).post(blog_update))
         .route("/blog/:slug", get(blog_detail))
         .route("/blog/admin", get(admin_pages::blog_admin_page))
+        .route("/links", get(links_list))
+        .route("/links/apply", post(links_apply))
+        .route("/links/applications", get(links_applications))
+        .route("/links/review", post(links_review))
+        .route("/links/sort", post(links_sort))
+        .route("/links/update", post(links_update))
+        .route("/links/delete", post(links_delete))
+        .route("/links/settings", get(links_settings_get).post(links_settings_set))
+        .route("/links/admin", get(admin_pages::links_admin_page))
         .route("/visitor", get(visitor_stats))
         .route("/visitor/visit", post(visitor_visit))
         .with_state(state)
@@ -810,6 +994,585 @@ async fn blog_update(
     StatusCode::OK
 }
 
+async fn links_list(State(state): State<AppState>) -> impl IntoResponse {
+    let conn = state.db.lock().unwrap();
+    let mut stmt = match conn.prepare(
+        "SELECT id, name, url, avatar_url, description, tags, sort_order, created_at
+         FROM friend_links
+         ORDER BY sort_order ASC, created_at DESC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Json(Vec::<FriendLink>::new()),
+    };
+
+    let rows = match stmt.query_map([], |row| {
+        Ok(FriendLink {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            url: row.get(2)?,
+            avatar_url: row.get(3)?,
+            description: row.get(4)?,
+            tags: row.get(5)?,
+            sort_order: row.get(6)?,
+            created_at: row.get(7)?,
+        })
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Json(Vec::<FriendLink>::new()),
+    };
+
+    Json(rows.filter_map(Result::ok).collect::<Vec<_>>())
+}
+
+async fn links_apply(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkApplyPayload>,
+) -> impl IntoResponse {
+    let site_name = payload.site_name.trim();
+    if site_name.is_empty() || site_name.chars().count() > 64 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "站点名称长度需在 1-64 字符内".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let site_url = payload.site_url.trim();
+    if !is_valid_http_url(site_url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "站点地址必须是可访问的 http/https 链接".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let avatar_url = normalize_optional(payload.avatar_url, 255);
+    if avatar_url
+        .as_deref()
+        .is_some_and(|value| !is_valid_http_url(value))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "头像地址格式不正确（需为 http/https）".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let description = normalize_optional(payload.description, 280);
+    let email = normalize_optional(payload.email, 128);
+    let note = normalize_optional(payload.note, 280);
+    let ip = client_ip(&headers);
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
+    let now = now_ts();
+
+    {
+        let conn = state.db.lock().unwrap();
+        let pending_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_link_applications
+                 WHERE site_url = ?1 AND status = 'pending'",
+                params![site_url],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if pending_count > 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiMessage {
+                    message: "该站点已有待处理申请，请勿重复提交".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        let linked_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_links WHERE url = ?1",
+                params![site_url],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if linked_count > 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiMessage {
+                    message: "该站点已在友链列表中".to_string(),
+                }),
+            )
+                .into_response();
+        }
+
+        let inserted = conn.execute(
+            "INSERT INTO friend_link_applications (
+                site_name, site_url, avatar_url, description, email, note,
+                status, ip, user_agent, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?8, ?9, ?10)",
+            params![
+                site_name,
+                site_url,
+                avatar_url,
+                description,
+                email,
+                note,
+                ip,
+                user_agent,
+                now,
+                now
+            ],
+        );
+        if inserted.is_err() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiMessage {
+                    message: "提交失败，请稍后重试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    let message = format!(
+        "New friend-link application\nsite: {}\nurl: {}\nemail: {}\ndescription: {}\nnote: {}",
+        site_name,
+        site_url,
+        email.as_deref().unwrap_or("-"),
+        description.as_deref().unwrap_or("-"),
+        note.as_deref().unwrap_or("-")
+    );
+    let notify_cfg = {
+        let conn = state.db.lock().unwrap();
+        state.notifier.runtime_config(&conn)
+    };
+    if let Err(err) = state
+        .notifier
+        .notify_link_application(&notify_cfg, &message)
+        .await
+    {
+        tracing::warn!("link notify failed: {}", err);
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(ApiMessage {
+            message: "友链申请已提交，站长看到后会尽快处理".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_applications(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let conn = state.db.lock().unwrap();
+    let mut stmt = match conn.prepare(
+        "SELECT id, site_name, site_url, avatar_url, description, email, note, status,
+                ip, user_agent, review_note, created_at, updated_at
+         FROM friend_link_applications
+         ORDER BY status = 'pending' DESC, created_at DESC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return (StatusCode::OK, Json(Vec::<LinkApplication>::new())).into_response(),
+    };
+    let rows = match stmt.query_map([], |row| {
+        Ok(LinkApplication {
+            id: row.get(0)?,
+            site_name: row.get(1)?,
+            site_url: row.get(2)?,
+            avatar_url: row.get(3)?,
+            description: row.get(4)?,
+            email: row.get(5)?,
+            note: row.get(6)?,
+            status: row.get(7)?,
+            ip: row.get(8)?,
+            user_agent: row.get(9)?,
+            review_note: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+        })
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return (StatusCode::OK, Json(Vec::<LinkApplication>::new())).into_response(),
+    };
+
+    (StatusCode::OK, Json(rows.filter_map(Result::ok).collect::<Vec<_>>())).into_response()
+}
+
+async fn links_review(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkReviewPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let action = payload.action.trim().to_lowercase();
+    if action != "approve" && action != "reject" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "action 仅支持 approve/reject".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let now = now_ts();
+    let mut conn = state.db.lock().unwrap();
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let app_row = tx
+        .query_row(
+            "SELECT site_name, site_url, avatar_url, description
+             FROM friend_link_applications WHERE id = ?1",
+            params![payload.application_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .ok();
+    let (site_name, site_url, avatar_url, description) = match app_row {
+        Some(v) => v,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiMessage {
+                    message: "申请记录不存在".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let review_note = normalize_optional(payload.review_note, 280);
+
+    if action == "approve" {
+        let link_id = format!("link-{}-{}", slugify_ascii(&site_name), payload.application_id);
+        let tags = normalize_optional(payload.tags, 120);
+        let sort_order = payload.sort_order.unwrap_or(now);
+        if tx
+            .execute(
+                "INSERT INTO friend_links (id, name, url, avatar_url, description, tags, sort_order, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET
+                   name = excluded.name,
+                   url = excluded.url,
+                   avatar_url = excluded.avatar_url,
+                   description = excluded.description,
+                   tags = excluded.tags,
+                   sort_order = excluded.sort_order",
+                params![
+                    link_id,
+                    site_name,
+                    site_url,
+                    avatar_url,
+                    description,
+                    tags,
+                    sort_order,
+                    now
+                ],
+            )
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if tx
+        .execute(
+            "UPDATE friend_link_applications
+             SET status = ?1, review_note = ?2, updated_at = ?3
+             WHERE id = ?4",
+            params![action, review_note, now, payload.application_id],
+        )
+        .is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if tx.commit().is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: if action == "approve" {
+                "已通过并加入友链列表".to_string()
+            } else {
+                "已拒绝该申请".to_string()
+            },
+        }),
+    )
+        .into_response()
+}
+
+async fn links_sort(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkSortPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut conn = state.db.lock().unwrap();
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    for item in payload.items {
+        if tx
+            .execute(
+                "UPDATE friend_links SET sort_order = ?1 WHERE id = ?2",
+                params![item.sort_order, item.id],
+            )
+            .is_err()
+        {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    if tx.commit().is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: "排序已更新".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkUpdatePayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let id = payload.id.trim();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "id 不能为空".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let name = payload.name.trim();
+    if name.is_empty() || name.chars().count() > 64 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "名称长度需在 1-64 字符内".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let url = payload.url.trim();
+    if !is_valid_http_url(url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "URL 需为 http/https".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let avatar_url = normalize_optional(payload.avatar_url, 255);
+    if avatar_url
+        .as_deref()
+        .is_some_and(|value| !is_valid_http_url(value))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "头像 URL 需为 http/https".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let description = normalize_optional(payload.description, 280);
+    let tags = normalize_optional(payload.tags, 120);
+    let sort_order = payload.sort_order.unwrap_or(0);
+
+    let conn = state.db.lock().unwrap();
+    let updated = conn
+        .execute(
+            "UPDATE friend_links
+             SET name = ?1, url = ?2, avatar_url = ?3, description = ?4, tags = ?5, sort_order = ?6
+             WHERE id = ?7",
+            params![name, url, avatar_url, description, tags, sort_order, id],
+        )
+        .unwrap_or(0);
+    if updated == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                message: "友链不存在".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: "友链已更新".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkDeletePayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let id = payload.id.trim();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "id 不能为空".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let conn = state.db.lock().unwrap();
+    let deleted = conn
+        .execute("DELETE FROM friend_links WHERE id = ?1", params![id])
+        .unwrap_or(0);
+    if deleted == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                message: "友链不存在".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: "友链已删除".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_settings_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let conn = state.db.lock().unwrap();
+    let settings = state.notifier.resolved_settings(&conn);
+    (StatusCode::OK, Json(settings)).into_response()
+}
+
+async fn links_settings_set(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkSettingsPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let now = now_ts();
+    let mut conn = state.db.lock().unwrap();
+    let tx = match conn.transaction() {
+        Ok(tx) => tx,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let updates = [
+        (
+            "tg_bot_token",
+            payload.tg_bot_token.map(|v| v.trim().chars().take(256).collect::<String>()),
+        ),
+        (
+            "tg_chat_id",
+            payload.tg_chat_id.map(|v| v.trim().chars().take(128).collect::<String>()),
+        ),
+        (
+            "smtp_host",
+            payload.smtp_host.map(|v| v.trim().chars().take(255).collect::<String>()),
+        ),
+        (
+            "smtp_port",
+            payload.smtp_port.map(|v| v.to_string()),
+        ),
+        (
+            "smtp_user",
+            payload.smtp_user.map(|v| v.trim().chars().take(255).collect::<String>()),
+        ),
+        ("smtp_pass", payload.smtp_pass.map(|v| v.trim().to_string())),
+        (
+            "smtp_from",
+            payload.smtp_from.map(|v| v.trim().chars().take(255).collect::<String>()),
+        ),
+        (
+            "smtp_to",
+            payload.smtp_to.map(|v| v.trim().chars().take(512).collect::<String>()),
+        ),
+        (
+            "smtp_starttls",
+            payload.smtp_starttls.map(|v| if v { "1".to_string() } else { "0".to_string() }),
+        ),
+    ];
+    for (key, value) in updates {
+        if let Some(value) = value {
+            if value.is_empty() {
+                if tx
+                    .execute(
+                        "DELETE FROM friend_link_settings WHERE key = ?1",
+                        params![key],
+                    )
+                    .is_err()
+                {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            } else if tx
+                .execute(
+                    "INSERT INTO friend_link_settings (key, value, updated_at)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    params![key, value, now],
+                )
+                .is_err()
+            {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    }
+    if tx.commit().is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let settings = state.notifier.resolved_settings(&conn);
+    (StatusCode::OK, Json(settings)).into_response()
+}
+
 async fn visitor_visit(
     State(state): State<AppState>,
     Json(payload): Json<VisitPayload>,
@@ -876,6 +1639,235 @@ async fn delete_device(
     StatusCode::OK
 }
 
+impl Notifier {
+    fn from_env() -> Self {
+        let tg_bot_token = normalize_env("LINK_TG_BOT_TOKEN");
+        let tg_chat_id = normalize_env("LINK_TG_CHAT_ID");
+
+        let smtp = {
+            let host = normalize_env("LINK_SMTP_HOST");
+            let from = normalize_env("LINK_SMTP_FROM");
+            let to = normalize_env("LINK_SMTP_TO");
+            match (host, from, to) {
+                (Some(host), Some(from), Some(to)) => {
+                    let port = std::env::var("LINK_SMTP_PORT")
+                        .ok()
+                        .and_then(|v| v.parse::<u16>().ok())
+                        .unwrap_or(587);
+                    let username = normalize_env("LINK_SMTP_USER");
+                    let password = normalize_env("LINK_SMTP_PASS");
+                    let use_starttls = std::env::var("LINK_SMTP_STARTTLS")
+                        .ok()
+                        .map(|v| v != "0" && v.to_lowercase() != "false")
+                        .unwrap_or(true);
+                    let recipients = to
+                        .split(',')
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                        .collect::<Vec<_>>();
+                    if recipients.is_empty() {
+                        None
+                    } else {
+                        Some(SmtpConfig {
+                            host,
+                            port,
+                            username,
+                            password,
+                            from,
+                            to: recipients,
+                            use_starttls,
+                        })
+                    }
+                }
+                _ => None,
+            }
+        };
+
+        Self {
+            http: reqwest::Client::new(),
+            tg_bot_token,
+            tg_chat_id,
+            smtp,
+        }
+    }
+
+    fn runtime_config(&self, conn: &Connection) -> RuntimeNotifyConfig {
+        let tg_bot_token = read_setting(conn, "tg_bot_token").or_else(|| self.tg_bot_token.clone());
+        let tg_chat_id = read_setting(conn, "tg_chat_id").or_else(|| self.tg_chat_id.clone());
+
+        let smtp_host = read_setting(conn, "smtp_host")
+            .or_else(|| self.smtp.as_ref().map(|v| v.host.clone()));
+        let smtp_from = read_setting(conn, "smtp_from")
+            .or_else(|| self.smtp.as_ref().map(|v| v.from.clone()));
+        let smtp_to = read_setting(conn, "smtp_to").or_else(|| {
+            self.smtp
+                .as_ref()
+                .map(|v| v.to.join(","))
+        });
+        let smtp_port = read_setting(conn, "smtp_port")
+            .and_then(|v| v.parse::<u16>().ok())
+            .or_else(|| self.smtp.as_ref().map(|v| v.port));
+        let smtp_user = read_setting(conn, "smtp_user")
+            .or_else(|| self.smtp.as_ref().and_then(|v| v.username.clone()));
+        let smtp_pass = read_setting(conn, "smtp_pass")
+            .or_else(|| self.smtp.as_ref().and_then(|v| v.password.clone()));
+        let smtp_starttls = read_setting(conn, "smtp_starttls")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .or_else(|| self.smtp.as_ref().map(|v| v.use_starttls))
+            .unwrap_or(true);
+
+        let smtp = match (smtp_host, smtp_from, smtp_to) {
+            (Some(host), Some(from), Some(to_raw)) => {
+                let recipients = to_raw
+                    .split(',')
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .collect::<Vec<_>>();
+                if recipients.is_empty() {
+                    None
+                } else {
+                    Some(SmtpConfig {
+                        host,
+                        port: smtp_port.unwrap_or(587),
+                        username: smtp_user,
+                        password: smtp_pass,
+                        from,
+                        to: recipients,
+                        use_starttls: smtp_starttls,
+                    })
+                }
+            }
+            _ => None,
+        };
+
+        RuntimeNotifyConfig {
+            tg_bot_token,
+            tg_chat_id,
+            smtp,
+        }
+    }
+
+    fn resolved_settings(&self, conn: &Connection) -> LinkSettingsResponse {
+        let cfg = self.runtime_config(conn);
+        LinkSettingsResponse {
+            tg_bot_token: cfg.tg_bot_token.clone(),
+            tg_chat_id: cfg.tg_chat_id.clone(),
+            smtp_host: cfg.smtp.as_ref().map(|v| v.host.clone()),
+            smtp_port: cfg.smtp.as_ref().map(|v| v.port),
+            smtp_user: cfg.smtp.as_ref().and_then(|v| v.username.clone()),
+            smtp_pass_set: cfg
+                .smtp
+                .as_ref()
+                .and_then(|v| v.password.clone())
+                .is_some(),
+            smtp_from: cfg.smtp.as_ref().map(|v| v.from.clone()),
+            smtp_to: cfg.smtp.as_ref().map(|v| v.to.join(",")),
+            smtp_starttls: cfg.smtp.as_ref().map(|v| v.use_starttls).unwrap_or(true),
+        }
+    }
+
+    async fn notify_link_application(
+        &self,
+        cfg: &RuntimeNotifyConfig,
+        message: &str,
+    ) -> Result<(), String> {
+        let mut channel_count = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+
+        if cfg.tg_bot_token.is_some() && cfg.tg_chat_id.is_some() {
+            channel_count += 1;
+            if let Err(err) = self
+                .send_tg(cfg.tg_bot_token.as_deref(), cfg.tg_chat_id.as_deref(), message)
+                .await
+            {
+                errors.push(err);
+            }
+        }
+
+        if cfg.smtp.is_some() {
+            channel_count += 1;
+            if let Err(err) = self.send_smtp(cfg.smtp.as_ref(), message).await {
+                errors.push(err);
+            }
+        }
+
+        if channel_count == 0 {
+            return Ok(());
+        }
+        if errors.len() == channel_count {
+            return Err(errors.join("; "));
+        }
+        Ok(())
+    }
+
+    async fn send_tg(
+        &self,
+        token: Option<&str>,
+        chat_id: Option<&str>,
+        message: &str,
+    ) -> Result<(), String> {
+        let token = token.ok_or_else(|| "tg token missing".to_string())?;
+        let chat_id = chat_id.ok_or_else(|| "tg chat id missing".to_string())?;
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+        let resp = self
+            .http
+            .post(url)
+            .json(&json!({
+                "chat_id": chat_id,
+                "text": message,
+                "disable_web_page_preview": true
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("tg request failed: {}", err))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("tg response {}: {}", status, body));
+        }
+        Ok(())
+    }
+
+    async fn send_smtp(&self, cfg: Option<&SmtpConfig>, message: &str) -> Result<(), String> {
+        let cfg = cfg.ok_or_else(|| "smtp config missing".to_string())?;
+        let from: Mailbox = cfg
+            .from
+            .parse()
+            .map_err(|err| format!("smtp from invalid: {}", err))?;
+        let mut builder = Message::builder()
+            .from(from)
+            .subject("New friend-link application");
+        for recipient in &cfg.to {
+            let mailbox: Mailbox = recipient
+                .parse()
+                .map_err(|err| format!("smtp to invalid: {}", err))?;
+            builder = builder.to(mailbox);
+        }
+        let email = builder
+            .body(message.to_string())
+            .map_err(|err| format!("smtp message build failed: {}", err))?;
+
+        let mut transport_builder = if cfg.use_starttls {
+            AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)
+                .map_err(|err| format!("smtp relay config failed: {}", err))?
+                .port(cfg.port)
+        } else {
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host).port(cfg.port)
+        };
+        if let (Some(username), Some(password)) = (&cfg.username, &cfg.password) {
+            transport_builder =
+                transport_builder.credentials(Credentials::new(username.clone(), password.clone()));
+        }
+        let transport = transport_builder.build();
+        transport
+            .send(email)
+            .await
+            .map_err(|err| format!("smtp send failed: {}", err))?;
+        Ok(())
+    }
+}
+
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
     if let Some(value) = headers.get("x-token") {
         if value.to_str().ok() == Some(token) {
@@ -917,4 +1909,73 @@ fn today_key() -> String {
 fn month_key() -> String {
     let now = Utc::now();
     format!("{:04}-{:02}", now.year(), now.month())
+}
+
+fn normalize_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn normalize_optional(value: Option<String>, max_len: usize) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            if v.chars().count() > max_len {
+                v.chars().take(max_len).collect::<String>()
+            } else {
+                v
+            }
+        })
+}
+
+fn is_valid_http_url(value: &str) -> bool {
+    Url::parse(value)
+        .map(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+        .unwrap_or(false)
+}
+
+fn client_ip(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        let ip = value
+            .split(',')
+            .next()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        if ip.is_some() {
+            return ip;
+        }
+    }
+    headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn read_setting(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM friend_link_settings WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .map(|v| v.trim().to_string())
+    .filter(|v| !v.is_empty())
+}
+
+fn slugify_ascii(value: &str) -> String {
+    let mut out = value
+        .trim()
+        .to_lowercase()
+        .replace(' ', "-")
+        .chars()
+        .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-')
+        .collect::<String>();
+    if out.is_empty() {
+        out = "friend".to_string();
+    }
+    out
 }

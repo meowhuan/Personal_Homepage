@@ -475,6 +475,13 @@ onBeforeUnmount(() => {
           >
             喵喵补给站
           </a>
+          <a
+            href="/friends.html"
+            class="meow-btn-ghost"
+            :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+          >
+            友链
+          </a>
         </div>
       </div>
 

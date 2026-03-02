@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 友链管理</title>
+    <link rel="stylesheet" href="/admin/common.css" />
+    <style>
+      .wrap { max-width: 1120px; }
+      input, textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid #eadbea;
+        padding: 10px 12px;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.84);
+      }
+      textarea { min-height: 72px; resize: vertical; }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      .panel {
+        border-radius: 16px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.72);
+        padding: 12px;
+        margin-top: 12px;
+      }
+      .list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+      .item {
+        border-radius: 14px;
+        border: 1px solid rgba(234, 219, 234, 0.9);
+        background: rgba(255, 255, 255, 0.78);
+        padding: 10px;
+      }
+      .item-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .item-title { font-size: 14px; font-weight: 700; }
+      .item-meta { font-size: 12px; color: #7b6b7a; margin-top: 4px; word-break: break-all; }
+      .row-inline { display: flex; gap: 8px; align-items: center; }
+      .small { font-size: 12px; color: #7b6b7a; }
+      .danger { background: #a03555; }
+      .ok { background: #2f8a58; }
+      .ghost { background: rgba(255, 255, 255, 0.9); color: #2b1d2a; border: 1px solid #eadbea; }
+      @media (max-width: 860px) {
+        .grid-2 { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar"><span class="dot"></span>Meow Links Admin</div>
+        <div class="content">
+          <div class="row">
+            <div>
+              <label>Token</label>
+              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
+            </div>
+            <div>
+              <label>接口根路径</label>
+              <input id="base" type="text" value="" placeholder="留空表示同域名" />
+            </div>
+          </div>
+          <div class="toolbar">
+            <button id="load-all" class="ghost">刷新全部</button>
+          </div>
+
+          <div class="grid-2">
+            <div class="panel">
+              <div class="row-inline">
+                <strong>待审核申请</strong>
+                <span class="small" id="pending-count"></span>
+              </div>
+              <div id="app-list" class="list"></div>
+            </div>
+            <div class="panel">
+              <div class="row-inline">
+                <strong>已收录友链</strong>
+                <button id="save-sort" class="ghost">保存排序</button>
+              </div>
+              <div id="link-list" class="list"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <strong>TG / SMTP 配置</strong>
+            <div class="grid-2" style="margin-top:10px;">
+              <div>
+                <label>TG Bot Token</label>
+                <input id="tg_bot_token" type="text" placeholder="留空表示禁用/清空" />
+              </div>
+              <div>
+                <label>TG Chat ID</label>
+                <input id="tg_chat_id" type="text" placeholder="留空表示禁用/清空" />
+              </div>
+              <div>
+                <label>SMTP Host</label>
+                <input id="smtp_host" type="text" />
+              </div>
+              <div>
+                <label>SMTP Port</label>
+                <input id="smtp_port" type="number" />
+              </div>
+              <div>
+                <label>SMTP User</label>
+                <input id="smtp_user" type="text" />
+              </div>
+              <div>
+                <label>SMTP Pass（留空不改，输入 `-` 清空）</label>
+                <input id="smtp_pass" type="password" />
+              </div>
+              <div>
+                <label>SMTP From</label>
+                <input id="smtp_from" type="text" />
+              </div>
+              <div>
+                <label>SMTP To（逗号分隔）</label>
+                <input id="smtp_to" type="text" />
+              </div>
+            </div>
+            <div class="toolbar">
+              <label class="row-inline small">
+                <input id="smtp_starttls" type="checkbox" style="width:auto;" checked />
+                启用 STARTTLS
+              </label>
+              <button id="save-settings">保存通知配置</button>
+            </div>
+          </div>
+
+          <div class="status" id="status"></div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const statusEl = document.getElementById("status");
+      const tokenEl = document.getElementById("token");
+      const baseEl = document.getElementById("base");
+      const appListEl = document.getElementById("app-list");
+      const linkListEl = document.getElementById("link-list");
+      const pendingCountEl = document.getElementById("pending-count");
+
+      const api = (path) => `${baseEl.value.trim()}${path}`;
+      const setStatus = (text) => { statusEl.textContent = text; };
+      const esc = (value = "") => String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;");
+      const authHeaders = () => ({
+        "content-type": "application/json",
+        "x-token": tokenEl.value.trim()
+      });
+      const ts = (value) => new Date(Number(value || 0) * 1000).toLocaleString("zh-CN");
+
+      const readSettingsForm = () => {
+        const passRaw = document.getElementById("smtp_pass").value.trim();
+        return {
+          tg_bot_token: document.getElementById("tg_bot_token").value.trim(),
+          tg_chat_id: document.getElementById("tg_chat_id").value.trim(),
+          smtp_host: document.getElementById("smtp_host").value.trim(),
+          smtp_port: Number(document.getElementById("smtp_port").value || 0) || null,
+          smtp_user: document.getElementById("smtp_user").value.trim(),
+          smtp_pass: passRaw === "" ? null : (passRaw === "-" ? "" : passRaw),
+          smtp_from: document.getElementById("smtp_from").value.trim(),
+          smtp_to: document.getElementById("smtp_to").value.trim(),
+          smtp_starttls: document.getElementById("smtp_starttls").checked
+        };
+      };
+
+      const fillSettingsForm = (cfg = {}) => {
+        document.getElementById("tg_bot_token").value = cfg.tg_bot_token || "";
+        document.getElementById("tg_chat_id").value = cfg.tg_chat_id || "";
+        document.getElementById("smtp_host").value = cfg.smtp_host || "";
+        document.getElementById("smtp_port").value = cfg.smtp_port || "";
+        document.getElementById("smtp_user").value = cfg.smtp_user || "";
+        document.getElementById("smtp_pass").value = "";
+        document.getElementById("smtp_from").value = cfg.smtp_from || "";
+        document.getElementById("smtp_to").value = cfg.smtp_to || "";
+        document.getElementById("smtp_starttls").checked = cfg.smtp_starttls !== false;
+      };
+
+      const renderApplications = (items = []) => {
+        appListEl.innerHTML = "";
+        const pending = items.filter((item) => item.status === "pending");
+        pendingCountEl.textContent = `待审核 ${pending.length} 条`;
+        if (items.length === 0) {
+          appListEl.innerHTML = `<div class="small">暂无申请记录</div>`;
+          return;
+        }
+        items.forEach((item) => {
+          const wrap = document.createElement("div");
+          wrap.className = "item";
+          wrap.innerHTML = `
+            <div class="item-head">
+              <div>
+                <div class="item-title">${esc(item.site_name)}</div>
+                <div class="item-meta">${esc(item.site_url)}</div>
+              </div>
+              <div class="small">${esc(item.status)} · ${ts(item.created_at)}</div>
+            </div>
+            <div class="small">邮箱：${esc(item.email || "-")} | IP：${esc(item.ip || "-")}</div>
+            <div class="small">简介：${esc(item.description || "-")}</div>
+            <div class="small">备注：${esc(item.note || "-")}</div>
+            <div class="row" style="margin-top:8px;">
+              <div><input data-tags placeholder="通过时可附带 tags（逗号分隔）" /></div>
+              <div><input data-sort type="number" placeholder="通过时 sort_order（默认当前时间）" /></div>
+            </div>
+            <div><textarea data-review-note placeholder="审核备注（可选）"></textarea></div>
+            <div class="toolbar" style="margin-bottom:0;">
+              <button class="ok" data-approve>通过</button>
+              <button class="danger" data-reject>拒绝</button>
+            </div>
+          `;
+          const submitReview = async (action) => {
+            setStatus(`${action === "approve" ? "通过" : "拒绝"}处理中...`);
+            const res = await fetch(api("/links/review"), {
+              method: "POST",
+              headers: authHeaders(),
+              body: JSON.stringify({
+                application_id: item.id,
+                action,
+                tags: wrap.querySelector("[data-tags]").value.trim() || null,
+                sort_order: Number(wrap.querySelector("[data-sort]").value || 0) || null,
+                review_note: wrap.querySelector("[data-review-note]").value.trim() || null
+              })
+            });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.message || "审核失败");
+            }
+            await loadAll();
+            setStatus(action === "approve" ? "已通过" : "已拒绝");
+          };
+          wrap.querySelector("[data-approve]").addEventListener("click", async () => {
+            try { await submitReview("approve"); } catch (err) { setStatus(err.message || "审核失败"); }
+          });
+          wrap.querySelector("[data-reject]").addEventListener("click", async () => {
+            try { await submitReview("reject"); } catch (err) { setStatus(err.message || "审核失败"); }
+          });
+          appListEl.appendChild(wrap);
+        });
+      };
+
+      const renderLinks = (items = []) => {
+        linkListEl.innerHTML = "";
+        if (items.length === 0) {
+          linkListEl.innerHTML = `<div class="small">暂无已收录友链</div>`;
+          return;
+        }
+        items.forEach((item) => {
+          const wrap = document.createElement("div");
+          wrap.className = "item";
+          wrap.dataset.id = item.id;
+          wrap.innerHTML = `
+            <div class="item-head">
+              <div>
+                <div class="item-title" data-title>${esc(item.name)}</div>
+                <div class="item-meta">${esc(item.url)}</div>
+              </div>
+              <div class="row-inline">
+                <button class="ghost" data-up>上移</button>
+                <button class="ghost" data-down>下移</button>
+              </div>
+            </div>
+            <div class="row-inline">
+              <span class="small">排序</span>
+              <input data-sort type="number" value="${Number(item.sort_order || 0)}" style="max-width:120px;" />
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <div><input data-name placeholder="名称" value="${esc(item.name || "")}" /></div>
+              <div><input data-url placeholder="URL" value="${esc(item.url || "")}" /></div>
+            </div>
+            <div class="row">
+              <div><input data-avatar placeholder="头像 URL" value="${esc(item.avatar_url || "")}" /></div>
+              <div><input data-tags placeholder="标签（逗号分隔）" value="${esc(item.tags || "")}" /></div>
+            </div>
+            <div><textarea data-description placeholder="简介">${esc(item.description || "")}</textarea></div>
+            <div class="toolbar" style="margin-bottom:0;">
+              <button class="ok" data-save-item>保存编辑</button>
+              <button class="danger" data-delete-item>删除友链</button>
+            </div>
+          `;
+          wrap.querySelector("[data-up]").addEventListener("click", () => {
+            const prev = wrap.previousElementSibling;
+            if (prev) linkListEl.insertBefore(wrap, prev);
+          });
+          wrap.querySelector("[data-down]").addEventListener("click", () => {
+            const next = wrap.nextElementSibling;
+            if (next) linkListEl.insertBefore(next, wrap);
+          });
+          wrap.querySelector("[data-name]").addEventListener("input", (event) => {
+            wrap.querySelector("[data-title]").textContent = event.target.value.trim() || "未命名友链";
+          });
+          wrap.querySelector("[data-save-item]").addEventListener("click", async () => {
+            try {
+              setStatus("保存友链中...");
+              const res = await fetch(api("/links/update"), {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({
+                  id: wrap.dataset.id,
+                  name: wrap.querySelector("[data-name]").value.trim(),
+                  url: wrap.querySelector("[data-url]").value.trim(),
+                  avatar_url: wrap.querySelector("[data-avatar]").value.trim() || null,
+                  description: wrap.querySelector("[data-description]").value.trim() || null,
+                  tags: wrap.querySelector("[data-tags]").value.trim() || null,
+                  sort_order: Number(wrap.querySelector("[data-sort]").value || 0)
+                })
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.message || "保存失败");
+              }
+              setStatus("友链已保存");
+              await loadLinks();
+            } catch (err) {
+              setStatus(err.message || "保存失败");
+            }
+          });
+          wrap.querySelector("[data-delete-item]").addEventListener("click", async () => {
+            if (!confirm("确定删除这条友链吗？")) return;
+            try {
+              setStatus("删除友链中...");
+              const res = await fetch(api("/links/delete"), {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({ id: wrap.dataset.id })
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.message || "删除失败");
+              }
+              setStatus("友链已删除");
+              await loadLinks();
+            } catch (err) {
+              setStatus(err.message || "删除失败");
+            }
+          });
+          linkListEl.appendChild(wrap);
+        });
+      };
+
+      const loadApplications = async () => {
+        const res = await fetch(api("/links/applications"), { headers: authHeaders() });
+        if (!res.ok) throw new Error("加载申请失败");
+        const data = await res.json();
+        renderApplications(Array.isArray(data) ? data : []);
+      };
+
+      const loadLinks = async () => {
+        const res = await fetch(api("/links"));
+        if (!res.ok) throw new Error("加载友链失败");
+        const data = await res.json();
+        renderLinks(Array.isArray(data) ? data : []);
+      };
+
+      const loadSettings = async () => {
+        const res = await fetch(api("/links/settings"), { headers: authHeaders() });
+        if (!res.ok) throw new Error("加载配置失败");
+        const data = await res.json();
+        fillSettingsForm(data || {});
+      };
+
+      const saveSort = async () => {
+        const rows = Array.from(linkListEl.querySelectorAll(".item"));
+        const items = rows.map((el, idx) => ({
+          id: el.dataset.id,
+          sort_order: Number(el.querySelector("[data-sort]").value || idx)
+        }));
+        setStatus("保存排序中...");
+        const res = await fetch(api("/links/sort"), {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ items })
+        });
+        setStatus(res.ok ? "排序已保存" : "排序保存失败");
+        if (res.ok) await loadLinks();
+      };
+
+      const saveSettings = async () => {
+        setStatus("保存通知配置中...");
+        const payload = readSettingsForm();
+        const res = await fetch(api("/links/settings"), {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          setStatus("通知配置保存失败");
+          return;
+        }
+        const data = await res.json();
+        fillSettingsForm(data || {});
+        setStatus("通知配置已保存");
+      };
+
+      const loadAll = async () => {
+        try {
+          setStatus("加载中...");
+          await Promise.all([loadApplications(), loadLinks(), loadSettings()]);
+          setStatus("已加载");
+        } catch (err) {
+          setStatus(err.message || "加载失败");
+        }
+      };
+
+      document.getElementById("load-all").addEventListener("click", loadAll);
+      document.getElementById("save-sort").addEventListener("click", saveSort);
+      document.getElementById("save-settings").addEventListener("click", saveSettings);
+      loadAll();
+    </script>
+  </body>
+</html>
