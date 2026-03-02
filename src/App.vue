@@ -85,7 +85,7 @@ const {
 
       <div class="mx-auto w-[min(1100px,92vw)] pb-20 pt-8 relative">
         <button
-          class="cord-switch"
+          class="cord-switch cord-switch-mobile md:hidden"
           type="button"
           @click="toggleTheme"
           :class="isNight ? 'cord-switch-night' : 'cord-switch-day'"
@@ -106,13 +106,35 @@ const {
             />
             <div class="font-display text-xl tracking-wide">Meowhuan</div>
           </div>
-          <div class="hidden items-center gap-5 text-sm md:flex" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+          <div class="nav-links-wrap hidden items-center justify-end gap-5 text-sm md:flex" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+            <button
+              class="cord-switch cord-switch-desktop cord-switch-desktop-left"
+              type="button"
+              @click="toggleTheme"
+              :class="isNight ? 'cord-switch-night' : 'cord-switch-day'"
+              aria-label="切换深夜模式"
+            >
+              <span class="cord-line"></span>
+              <span class="cord-knob">{{ isNight ? "🌙" : "☀️" }}</span>
+              <span class="cord-label" aria-hidden="true"></span>
+            </button>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#about">关于我</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#schedule">行程表</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/blog.html">博客</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/friends.html">友链</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
+            <button
+              class="cord-switch cord-switch-desktop cord-switch-desktop-right"
+              type="button"
+              @click="toggleTheme"
+              :class="isNight ? 'cord-switch-night' : 'cord-switch-day'"
+              aria-label="切换深夜模式"
+            >
+              <span class="cord-line"></span>
+              <span class="cord-knob">{{ isNight ? "🌙" : "☀️" }}</span>
+              <span class="cord-label" aria-hidden="true"></span>
+            </button>
           </div>
         </nav>
 

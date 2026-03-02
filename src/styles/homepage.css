@@ -109,9 +109,10 @@
 }
 
 .cord-switch {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 6px);
-  right: calc((100vw - min(1100px, 92vw)) / 2 - 100px);
+  position: relative;
+  top: 0;
+  right: auto;
+  left: auto;
   transform: none;
   display: flex;
   flex-direction: column;
@@ -124,9 +125,47 @@
   z-index: 20;
 }
 
+.cord-switch-desktop {
+  display: none;
+  position: absolute;
+  top: -26px;
+}
+
+.nav-links-wrap {
+  position: relative;
+}
+
+.cord-switch-mobile {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 0px);
+  right: max(calc(env(safe-area-inset-right, 0px) + 6px), calc((100vw - min(1100px, 92vw)) / 2 + 2px));
+  left: auto;
+  z-index: 40;
+}
+
+@media (min-width: 768px) {
+  .cord-switch-mobile {
+    display: none !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1299px) {
+  .cord-switch-desktop-left {
+    display: flex;
+    right: calc(100% + 8px);
+  }
+}
+
+@media (min-width: 1300px) {
+  .cord-switch-desktop-right {
+    display: flex;
+    left: calc(100% + 30px);
+  }
+}
+
 .cord-line {
   width: 2px;
-  height: 36px;
+  height: 60px;
   background: #e9d9ea;
   border-radius: 999px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
@@ -172,13 +211,6 @@
 
 .cord-switch-night .cord-label {
   color: #b8a6d8;
-}
-
-@media (max-width: 640px) {
-  .cord-switch {
-    top: calc(env(safe-area-inset-top, 0px) + 4px);
-    right: calc((100vw - min(1100px, 92vw)) / 2 - 8px);
-  }
 }
 
 .motion-card {
