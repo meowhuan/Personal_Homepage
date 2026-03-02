@@ -9,11 +9,12 @@ Android offers two approaches:
 > 说明：原生 App 方案已暂停，当前以 AutoX.js / Magisk 为主。
 > Note: native app is paused. AutoX.js / Magisk are the primary options.
 
-## 方案 A：AutoX.js
+## 方案 A：AutoX.js / AutoX v7
 
 脚本位于 / Script path:
 
 - `status-client-android/status.js`
+- `status-client-android/status-v7.js` (AutoX v7)
 
 修改脚本顶部配置 / Edit config at the top:
 
@@ -30,6 +31,11 @@ Android offers two approaches:
 - 前台保活（尽力）/ best-effort keep-alive
 - 尝试从通知读取网易云音乐当前歌曲（需通知读取权限）
   / Try to read current Netease song from notifications (notification access required)
+
+建议 / Recommendation:
+
+- AutoX v7（如 `aiselp/AutoX` 的 `setup-v7` 分支）优先使用 `status-v7.js`
+- 旧版 AutoX / Auto.js 兼容环境优先使用 `status.js`
 
 ## 方案 B：Magisk Shell 守护（root）
 
