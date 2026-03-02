@@ -1593,8 +1593,9 @@ async fn perform_review_decision(
     }
 
     let now = now_ts();
-    let review_note = normalize_optional(payload.review_note, 280);
-    let (site_name, site_url, applicant_email) = {
+    let incoming_review_note = normalize_optional(payload.review_note, 280);
+    let manual_note_provided = incoming_review_note.is_some();
+    let (site_name, site_url, applicant_email, final_review_note) = {
         let mut conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
         let tx = match conn.transaction() {
             Ok(tx) => tx,
@@ -1602,7 +1603,7 @@ async fn perform_review_decision(
         };
         let app_row = tx
             .query_row(
-                "SELECT site_name, site_url, avatar_url, description, email
+                "SELECT site_name, site_url, avatar_url, description, email, review_note
                  FROM friend_link_applications WHERE id = ?1",
                 params![payload.application_id],
                 |row| {
@@ -1612,13 +1613,28 @@ async fn perform_review_decision(
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 },
             )
             .ok();
-        let (site_name, site_url, avatar_url, description, applicant_email) = match app_row {
+        let (site_name, site_url, avatar_url, description, applicant_email, existing_review_note) =
+            match app_row {
             Some(v) => v,
             None => return Err("申请记录不存在".to_string()),
+        };
+        let existing_review_note = normalize_optional(existing_review_note, 560);
+        let final_review_note = match (existing_review_note, incoming_review_note.clone()) {
+            (Some(existing), Some(incoming)) => {
+                if existing == incoming {
+                    Some(existing)
+                } else {
+                    Some(format!("{}\n人工复核：{}", existing, incoming))
+                }
+            }
+            (Some(existing), None) => Some(existing),
+            (None, Some(incoming)) => Some(incoming),
+            (None, None) => None,
         };
 
         if action == "approve" {
@@ -1669,7 +1685,7 @@ async fn perform_review_decision(
                 "UPDATE friend_link_applications
                  SET status = ?1, review_note = ?2, updated_at = ?3
                  WHERE id = ?4",
-                params![action, review_note.clone(), now, payload.application_id],
+                params![action, final_review_note.clone(), now, payload.application_id],
             )
             .is_err()
         {
@@ -1678,7 +1694,7 @@ async fn perform_review_decision(
         if tx.commit().is_err() {
             return Err("事务提交失败".to_string());
         }
-        (site_name, site_url, applicant_email)
+        (site_name, site_url, applicant_email, final_review_note)
     };
 
     let applicant_email = normalize_optional(applicant_email, 128);
@@ -1699,7 +1715,8 @@ async fn perform_review_decision(
                 &site_name,
                 &site_url,
                 &action,
-                review_note.as_deref(),
+                final_review_note.as_deref(),
+                !send_admin_smtp_notify && manual_note_provided,
             )
             .await
         {
@@ -1731,7 +1748,7 @@ async fn perform_review_decision(
                     action,
                     site_name,
                     site_url,
-                    review_note.as_deref().unwrap_or("-")
+                    final_review_note.as_deref().unwrap_or("-")
                 );
                 if let Err(err) = state
                     .notifier
@@ -2113,14 +2130,15 @@ async fn remove_link_and_notify(
                 .notify_review_result_email(
                     notify_cfg.smtp.as_ref(),
                     &email,
-                    &app_name,
-                    &app_url,
-                    "reject",
-                    Some(review_note),
-                )
-                .await
-            {
-                tracing::warn!("link removal mail failed: {}", err);
+                        &app_name,
+                        &app_url,
+                        "reject",
+                        Some(review_note),
+                        false,
+                    )
+                    .await
+                {
+                    tracing::warn!("link removal mail failed: {}", err);
             }
         }
     }
@@ -2316,6 +2334,7 @@ impl Notifier {
         site_url: &str,
         action: &str,
         review_note: Option<&str>,
+        suppress_backlink_reminder: bool,
     ) -> Result<(), String> {
         let status_text = if action == "approve" {
             "已通过"
@@ -2324,6 +2343,7 @@ impl Notifier {
         };
         let backlink_reminder = review_note
             .map(|v| v.to_lowercase())
+            .filter(|_| !suppress_backlink_reminder)
             .filter(|v| v.contains("未检测到本站链接") || v.contains("no_backlink"))
             .map(|_| {
                 "\n\n提醒：当前未检测到你的网站包含本站链接。\n请在站点首页添加本站友链后再提交/等待复核：\nhttps://www.meowra.cn/"
