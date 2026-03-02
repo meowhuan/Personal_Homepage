@@ -21,6 +21,7 @@
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 12px;
+        align-items: start;
       }
       .panel {
         border-radius: 16px;
@@ -36,6 +37,7 @@
         background: rgba(255, 255, 255, 0.78);
         padding: 10px;
       }
+      .item.collapsed .item-body { display: none; }
       .item-head {
         display: flex;
         justify-content: space-between;
@@ -49,6 +51,7 @@
       .danger { background: #a03555; }
       .ok { background: #2f8a58; }
       .ghost { background: rgba(255, 255, 255, 0.9); color: #2b1d2a; border: 1px solid #eadbea; }
+      .toggle { min-width: 72px; }
       @media (max-width: 860px) {
         .grid-2 { grid-template-columns: 1fr; }
       }
@@ -79,6 +82,7 @@
                 <strong>待审核申请</strong>
                 <span class="small" id="pending-count"></span>
               </div>
+              <div class="small">仅显示 `pending`，审核通过/拒绝后会自动从此处消失。</div>
               <div id="app-list" class="list"></div>
             </div>
             <div class="panel">
@@ -92,38 +96,42 @@
 
           <div class="panel">
             <strong>TG / SMTP 配置</strong>
+            <div class="small" style="margin-top:6px;">
+              SMTP 结果通知依赖以下字段：`SMTP Host`、`SMTP From`、`SMTP To`（站长收件箱）。
+              申请者回信通知会自动发往其申请邮箱。`SMTP Pass` 留空表示不修改，输入 `-` 表示清空。
+            </div>
             <div class="grid-2" style="margin-top:10px;">
               <div>
                 <label>TG Bot Token</label>
-                <input id="tg_bot_token" type="text" placeholder="留空表示禁用/清空" />
+                <input id="tg_bot_token" type="text" placeholder="如：123456:ABCDEF..." />
               </div>
               <div>
                 <label>TG Chat ID</label>
-                <input id="tg_chat_id" type="text" placeholder="留空表示禁用/清空" />
+                <input id="tg_chat_id" type="text" placeholder="如：123456789 或 -100xxxx" />
               </div>
               <div>
                 <label>SMTP Host</label>
-                <input id="smtp_host" type="text" />
+                <input id="smtp_host" type="text" placeholder="如：smtp.qq.com" />
               </div>
               <div>
                 <label>SMTP Port</label>
-                <input id="smtp_port" type="number" />
+                <input id="smtp_port" type="number" placeholder="587 / 465" />
               </div>
               <div>
                 <label>SMTP User</label>
-                <input id="smtp_user" type="text" />
+                <input id="smtp_user" type="text" placeholder="如：bot@example.com" />
               </div>
               <div>
                 <label>SMTP Pass（留空不改，输入 `-` 清空）</label>
-                <input id="smtp_pass" type="password" />
+                <input id="smtp_pass" type="password" placeholder="SMTP 密码/授权码" />
               </div>
               <div>
                 <label>SMTP From</label>
-                <input id="smtp_from" type="text" />
+                <input id="smtp_from" type="text" placeholder="如：Meow Bot <bot@example.com>" />
               </div>
               <div>
                 <label>SMTP To（逗号分隔）</label>
-                <input id="smtp_to" type="text" />
+                <input id="smtp_to" type="text" placeholder="如：owner@example.com,backup@example.com" />
               </div>
             </div>
             <div class="toolbar">
@@ -148,6 +156,10 @@
       const pendingCountEl = document.getElementById("pending-count");
 
       const api = (path) => `${baseEl.value.trim()}${path}`;
+      const apiNoStore = (path) => {
+        const target = api(path);
+        return `${target}${target.includes("?") ? "&" : "?"}_ts=${Date.now()}`;
+      };
       const setStatus = (text) => { statusEl.textContent = text; };
       const esc = (value = "") => String(value)
         .replaceAll("&", "&amp;")
@@ -191,11 +203,11 @@
         appListEl.innerHTML = "";
         const pending = items.filter((item) => item.status === "pending");
         pendingCountEl.textContent = `待审核 ${pending.length} 条`;
-        if (items.length === 0) {
+        if (pending.length === 0) {
           appListEl.innerHTML = `<div class="small">暂无申请记录</div>`;
           return;
         }
-        items.forEach((item) => {
+        pending.forEach((item) => {
           const wrap = document.createElement("div");
           wrap.className = "item";
           wrap.innerHTML = `
@@ -257,7 +269,7 @@
         }
         items.forEach((item) => {
           const wrap = document.createElement("div");
-          wrap.className = "item";
+          wrap.className = "item collapsed";
           wrap.dataset.id = item.id;
           wrap.innerHTML = `
             <div class="item-head">
@@ -266,28 +278,35 @@
                 <div class="item-meta">${esc(item.url)}</div>
               </div>
               <div class="row-inline">
+                <button class="ghost toggle" data-toggle>展开</button>
                 <button class="ghost" data-up>上移</button>
                 <button class="ghost" data-down>下移</button>
               </div>
             </div>
-            <div class="row-inline">
-              <span class="small">排序</span>
-              <input data-sort type="number" value="${Number(item.sort_order || 0)}" style="max-width:120px;" />
-            </div>
-            <div class="row" style="margin-top:8px;">
-              <div><input data-name placeholder="名称" value="${esc(item.name || "")}" /></div>
-              <div><input data-url placeholder="URL" value="${esc(item.url || "")}" /></div>
-            </div>
-            <div class="row">
-              <div><input data-avatar placeholder="头像 URL" value="${esc(item.avatar_url || "")}" /></div>
-              <div><input data-tags placeholder="标签（逗号分隔）" value="${esc(item.tags || "")}" /></div>
-            </div>
-            <div><textarea data-description placeholder="简介">${esc(item.description || "")}</textarea></div>
-            <div class="toolbar" style="margin-bottom:0;">
-              <button class="ok" data-save-item>保存编辑</button>
-              <button class="danger" data-delete-item>删除友链</button>
+            <div class="item-body">
+              <div class="row-inline">
+                <span class="small">排序</span>
+                <input data-sort type="number" value="${Number(item.sort_order || 0)}" style="max-width:120px;" />
+              </div>
+              <div class="row" style="margin-top:8px;">
+                <div><input data-name placeholder="名称" value="${esc(item.name || "")}" /></div>
+                <div><input data-url placeholder="URL" value="${esc(item.url || "")}" /></div>
+              </div>
+              <div class="row">
+                <div><input data-avatar placeholder="头像 URL" value="${esc(item.avatar_url || "")}" /></div>
+                <div><input data-tags placeholder="标签（逗号分隔）" value="${esc(item.tags || "")}" /></div>
+              </div>
+              <div><textarea data-description placeholder="简介">${esc(item.description || "")}</textarea></div>
+              <div class="toolbar" style="margin-bottom:0;">
+                <button class="ok" data-save-item>保存编辑</button>
+                <button class="danger" data-delete-item>删除友链</button>
+              </div>
             </div>
           `;
+          wrap.querySelector("[data-toggle]").addEventListener("click", (event) => {
+            wrap.classList.toggle("collapsed");
+            event.currentTarget.textContent = wrap.classList.contains("collapsed") ? "展开" : "收起";
+          });
           wrap.querySelector("[data-up]").addEventListener("click", () => {
             const prev = wrap.previousElementSibling;
             if (prev) linkListEl.insertBefore(wrap, prev);
@@ -349,21 +368,27 @@
       };
 
       const loadApplications = async () => {
-        const res = await fetch(api("/links/applications"), { headers: authHeaders() });
+        const res = await fetch(apiNoStore("/links/applications"), {
+          headers: authHeaders(),
+          cache: "no-store"
+        });
         if (!res.ok) throw new Error("加载申请失败");
         const data = await res.json();
         renderApplications(Array.isArray(data) ? data : []);
       };
 
       const loadLinks = async () => {
-        const res = await fetch(api("/links"));
+        const res = await fetch(apiNoStore("/links"), { cache: "no-store" });
         if (!res.ok) throw new Error("加载友链失败");
         const data = await res.json();
         renderLinks(Array.isArray(data) ? data : []);
       };
 
       const loadSettings = async () => {
-        const res = await fetch(api("/links/settings"), { headers: authHeaders() });
+        const res = await fetch(apiNoStore("/links/settings"), {
+          headers: authHeaders(),
+          cache: "no-store"
+        });
         if (!res.ok) throw new Error("加载配置失败");
         const data = await res.json();
         fillSettingsForm(data || {});

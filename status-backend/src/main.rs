@@ -1227,85 +1227,111 @@ async fn links_review(
     }
 
     let now = now_ts();
-    let mut conn = state.db.lock().unwrap();
-    let tx = match conn.transaction() {
-        Ok(tx) => tx,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    let app_row = tx
-        .query_row(
-            "SELECT site_name, site_url, avatar_url, description
-             FROM friend_link_applications WHERE id = ?1",
-            params![payload.application_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            },
-        )
-        .ok();
-    let (site_name, site_url, avatar_url, description) = match app_row {
-        Some(v) => v,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiMessage {
-                    message: "申请记录不存在".to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
     let review_note = normalize_optional(payload.review_note, 280);
+    let (site_name, site_url, applicant_email) = {
+        let mut conn = state.db.lock().unwrap();
+        let tx = match conn.transaction() {
+            Ok(tx) => tx,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let app_row = tx
+            .query_row(
+                "SELECT site_name, site_url, avatar_url, description, email
+                 FROM friend_link_applications WHERE id = ?1",
+                params![payload.application_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )
+            .ok();
+        let (site_name, site_url, avatar_url, description, applicant_email) = match app_row {
+            Some(v) => v,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ApiMessage {
+                        message: "申请记录不存在".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        };
 
-    if action == "approve" {
-        let link_id = format!("link-{}-{}", slugify_ascii(&site_name), payload.application_id);
-        let tags = normalize_optional(payload.tags, 120);
-        let sort_order = payload.sort_order.unwrap_or(now);
+        if action == "approve" {
+            let link_id = format!("link-{}-{}", slugify_ascii(&site_name), payload.application_id);
+            let tags = normalize_optional(payload.tags, 120);
+            let sort_order = payload.sort_order.unwrap_or(now);
+            if tx
+                .execute(
+                    "INSERT INTO friend_links (id, name, url, avatar_url, description, tags, sort_order, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     ON CONFLICT(id) DO UPDATE SET
+                       name = excluded.name,
+                       url = excluded.url,
+                       avatar_url = excluded.avatar_url,
+                       description = excluded.description,
+                       tags = excluded.tags,
+                       sort_order = excluded.sort_order",
+                    params![
+                        link_id,
+                        site_name,
+                        site_url,
+                        avatar_url,
+                        description,
+                        tags,
+                        sort_order,
+                        now
+                    ],
+                )
+                .is_err()
+            {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+
         if tx
             .execute(
-                "INSERT INTO friend_links (id, name, url, avatar_url, description, tags, sort_order, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                 ON CONFLICT(id) DO UPDATE SET
-                   name = excluded.name,
-                   url = excluded.url,
-                   avatar_url = excluded.avatar_url,
-                   description = excluded.description,
-                   tags = excluded.tags,
-                   sort_order = excluded.sort_order",
-                params![
-                    link_id,
-                    site_name,
-                    site_url,
-                    avatar_url,
-                    description,
-                    tags,
-                    sort_order,
-                    now
-                ],
+                "UPDATE friend_link_applications
+                 SET status = ?1, review_note = ?2, updated_at = ?3
+                 WHERE id = ?4",
+                params![action, review_note.clone(), now, payload.application_id],
             )
             .is_err()
         {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-    }
+        if tx.commit().is_err() {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        (site_name, site_url, applicant_email)
+    };
 
-    if tx
-        .execute(
-            "UPDATE friend_link_applications
-             SET status = ?1, review_note = ?2, updated_at = ?3
-             WHERE id = ?4",
-            params![action, review_note, now, payload.application_id],
-        )
-        .is_err()
-    {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-    if tx.commit().is_err() {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let applicant_email = normalize_optional(applicant_email, 128);
+    if let Some(email) = applicant_email {
+        let notify_cfg = {
+            let conn = state.db.lock().unwrap();
+            state.notifier.runtime_config(&conn)
+        };
+        if let Err(err) = state
+            .notifier
+            .notify_review_result_email(
+                notify_cfg.smtp.as_ref(),
+                &email,
+                &site_name,
+                &site_url,
+                &action,
+                review_note.as_deref(),
+            )
+            .await
+        {
+            tracing::warn!("review result mail failed: {}", err);
+        }
     }
 
     (
@@ -1786,7 +1812,7 @@ impl Notifier {
 
         if cfg.smtp.is_some() {
             channel_count += 1;
-            if let Err(err) = self.send_smtp(cfg.smtp.as_ref(), message).await {
+            if let Err(err) = self.send_smtp(cfg.smtp.as_ref(), "New friend-link application", message, None).await {
                 errors.push(err);
             }
         }
@@ -1798,6 +1824,37 @@ impl Notifier {
             return Err(errors.join("; "));
         }
         Ok(())
+    }
+
+    async fn notify_review_result_email(
+        &self,
+        smtp_cfg: Option<&SmtpConfig>,
+        applicant_email: &str,
+        site_name: &str,
+        site_url: &str,
+        action: &str,
+        review_note: Option<&str>,
+    ) -> Result<(), String> {
+        let status_text = if action == "approve" {
+            "已通过"
+        } else {
+            "未通过"
+        };
+        let subject = format!("友链申请审核结果：{}", status_text);
+        let body = format!(
+            "你好，\n\n你提交的友链申请已完成审核。\n\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}\n\n此邮件由系统自动发送，请勿直接回复。",
+            site_name,
+            site_url,
+            status_text,
+            review_note.unwrap_or("-")
+        );
+        self.send_smtp(
+            smtp_cfg,
+            &subject,
+            &body,
+            Some(vec![applicant_email.to_string()]),
+        )
+        .await
     }
 
     async fn send_tg(
@@ -1829,16 +1886,26 @@ impl Notifier {
         Ok(())
     }
 
-    async fn send_smtp(&self, cfg: Option<&SmtpConfig>, message: &str) -> Result<(), String> {
+    async fn send_smtp(
+        &self,
+        cfg: Option<&SmtpConfig>,
+        subject: &str,
+        message: &str,
+        override_to: Option<Vec<String>>,
+    ) -> Result<(), String> {
         let cfg = cfg.ok_or_else(|| "smtp config missing".to_string())?;
+        let recipients = override_to.unwrap_or_else(|| cfg.to.clone());
+        if recipients.is_empty() {
+            return Err("smtp recipients missing".to_string());
+        }
         let from: Mailbox = cfg
             .from
             .parse()
             .map_err(|err| format!("smtp from invalid: {}", err))?;
         let mut builder = Message::builder()
             .from(from)
-            .subject("New friend-link application");
-        for recipient in &cfg.to {
+            .subject(subject);
+        for recipient in &recipients {
             let mailbox: Mailbox = recipient
                 .parse()
                 .map_err(|err| format!("smtp to invalid: {}", err))?;

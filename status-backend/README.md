@@ -66,6 +66,8 @@ STATUS_TOKEN=your_token
 - `POST /links/settings` (需要 token，保存 TG/SMTP 配置)
 - `GET /links/admin` (友链管理页面)
 
+说明：若申请记录包含 `email` 且 SMTP 已配置，`/links/review` 完成后会自动给申请者邮箱发送审核结果通知。
+
 `/blog` 正文字段支持两种写法（兼容）：
 - `content_md`: Markdown 原文（推荐）
 - `content`: 字符串数组（旧格式，仍可用）
