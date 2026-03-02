@@ -111,7 +111,7 @@
 .cord-switch {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 6px);
-  right: calc((100vw - min(1100px, 92vw)) / 2 - 18px);
+  right: calc((100vw - min(1100px, 92vw)) / 2 - 100px);
   transform: none;
   display: flex;
   flex-direction: column;
