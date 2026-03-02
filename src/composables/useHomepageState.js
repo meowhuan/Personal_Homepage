@@ -11,11 +11,10 @@ const HRT_TARGET_DATE = "2026-01-16T00:00:00+08:00";
 const SITE_STARTED_AT = "2026-02-06T19:56:27+08:00";
 
 function createThemeUrl(isNight) {
-  const suffix = `?v=${Date.now()}`;
-  const base = isNight
-    ? "https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus-dark.css"
-    : "https://raw.githack.com/meowhuan/Personal_Homepage/main/public/giscus.css";
-  return `${base}${suffix}`;
+  const file = isNight ? "/giscus-dark.css" : "/giscus.css";
+  const url = new URL(file, window.location.origin);
+  url.searchParams.set("v", Date.now().toString());
+  return url.toString();
 }
 
 export function useHomepageState() {
