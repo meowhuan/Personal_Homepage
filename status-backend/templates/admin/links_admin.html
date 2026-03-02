@@ -141,6 +141,15 @@
               </label>
               <button id="save-settings">保存通知配置</button>
             </div>
+            <div class="row">
+              <div>
+                <label>测试收件邮箱（可选）</label>
+                <input id="smtp_test_recipient" type="text" placeholder="留空则发到 SMTP To 配置中的收件人" />
+              </div>
+              <div style="display:flex;align-items:flex-end;">
+                <button id="test-smtp" class="ghost">发送测试邮件</button>
+              </div>
+            </div>
           </div>
 
           <div class="status" id="status"></div>
@@ -427,6 +436,20 @@
         setStatus("通知配置已保存");
       };
 
+      const testSmtp = async () => {
+        setStatus("SMTP 测试发送中...");
+        const recipient = document.getElementById("smtp_test_recipient").value.trim();
+        const res = await fetch(api("/links/settings/test-smtp"), {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({
+            recipient: recipient || null
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        setStatus(data.message || (res.ok ? "SMTP 测试发送成功" : "SMTP 测试发送失败"));
+      };
+
       const loadAll = async () => {
         try {
           setStatus("加载中...");
@@ -440,6 +463,13 @@
       document.getElementById("load-all").addEventListener("click", loadAll);
       document.getElementById("save-sort").addEventListener("click", saveSort);
       document.getElementById("save-settings").addEventListener("click", saveSettings);
+      document.getElementById("test-smtp").addEventListener("click", async () => {
+        try {
+          await testSmtp();
+        } catch (err) {
+          setStatus(err.message || "SMTP 测试发送失败");
+        }
+      });
       loadAll();
     </script>
   </body>

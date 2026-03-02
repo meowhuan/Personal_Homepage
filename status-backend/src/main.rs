@@ -276,6 +276,11 @@ struct LinkSettingsPayload {
     smtp_starttls: Option<bool>,
 }
 
+#[derive(Deserialize)]
+struct SmtpTestPayload {
+    recipient: Option<String>,
+}
+
 #[derive(Clone)]
 struct SmtpConfig {
     host: String,
@@ -469,6 +474,7 @@ async fn main() {
         .route("/links/update", post(links_update))
         .route("/links/delete", post(links_delete))
         .route("/links/settings", get(links_settings_get).post(links_settings_set))
+        .route("/links/settings/test-smtp", post(links_settings_test_smtp))
         .route("/links/admin", get(admin_pages::links_admin_page))
         .route("/visitor", get(visitor_stats))
         .route("/visitor/visit", post(visitor_visit))
@@ -1597,6 +1603,63 @@ async fn links_settings_set(
 
     let settings = state.notifier.resolved_settings(&conn);
     (StatusCode::OK, Json(settings)).into_response()
+}
+
+async fn links_settings_test_smtp(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SmtpTestPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let recipient = normalize_optional(payload.recipient, 255);
+    let notify_cfg = {
+        let conn = state.db.lock().unwrap();
+        state.notifier.runtime_config(&conn)
+    };
+    if notify_cfg.smtp.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "SMTP 未配置完整，请先保存 SMTP Host/From/To".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let now_local = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let subject = "SMTP test from Meow Links Admin";
+    let body = format!(
+        "这是一封 SMTP 测试邮件。\n\n发送时间：{}\n服务：status-backend\n说明：若收到此邮件，表示当前 SMTP 配置可用。",
+        now_local
+    );
+    let override_to = recipient.map(|v| vec![v.clone()]);
+    let send_result = state
+        .notifier
+        .send_smtp(
+            notify_cfg.smtp.as_ref(),
+            subject,
+            &body,
+            override_to,
+        )
+        .await;
+    match send_result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "SMTP 测试邮件发送成功".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ApiMessage {
+                message: format!("SMTP 测试失败: {}", err),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn visitor_visit(

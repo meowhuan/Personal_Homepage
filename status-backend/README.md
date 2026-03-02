@@ -64,6 +64,7 @@ STATUS_TOKEN=your_token
 - `POST /links/delete` (需要 token，删除单条友链)
 - `GET /links/settings` (需要 token，读取 TG/SMTP 配置)
 - `POST /links/settings` (需要 token，保存 TG/SMTP 配置)
+- `POST /links/settings/test-smtp` (需要 token，发送 SMTP 测试邮件)
 - `GET /links/admin` (友链管理页面)
 
 说明：若申请记录包含 `email` 且 SMTP 已配置，`/links/review` 完成后会自动给申请者邮箱发送审核结果通知。
