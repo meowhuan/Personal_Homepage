@@ -1814,11 +1814,7 @@ impl Notifier {
 
         let smtp = match (smtp_host, smtp_from, smtp_to) {
             (Some(host), Some(from), Some(to_raw)) => {
-                let recipients = to_raw
-                    .split(',')
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty())
-                    .collect::<Vec<_>>();
+                let recipients = split_recipients(&to_raw);
                 if recipients.is_empty() {
                     None
                 } else {
@@ -1876,6 +1872,7 @@ impl Notifier {
                 .send_tg(cfg.tg_bot_token.as_deref(), cfg.tg_chat_id.as_deref(), message)
                 .await
             {
+                tracing::warn!("link notify tg failed: {}", err);
                 errors.push(err);
             }
         }
@@ -1883,6 +1880,7 @@ impl Notifier {
         if cfg.smtp.is_some() {
             channel_count += 1;
             if let Err(err) = self.send_smtp(cfg.smtp.as_ref(), "New friend-link application", message, None).await {
+                tracing::warn!("link notify smtp failed: {}", err);
                 errors.push(err);
             }
         }
@@ -1890,7 +1888,7 @@ impl Notifier {
         if channel_count == 0 {
             return Ok(());
         }
-        if errors.len() == channel_count {
+        if !errors.is_empty() {
             return Err(errors.join("; "));
         }
         Ok(())
@@ -2129,6 +2127,13 @@ fn read_setting(conn: &Connection, key: &str) -> Option<String> {
     .ok()
     .map(|v| v.trim().to_string())
     .filter(|v| !v.is_empty())
+}
+
+fn split_recipients(raw: &str) -> Vec<String> {
+    raw.split(|c| c == ',' || c == '，' || c == ';' || c == '；' || c == '\n' || c == '\r')
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
 }
 
 fn slugify_ascii(value: &str) -> String {
