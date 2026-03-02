@@ -307,6 +307,13 @@ struct RuntimeNotifyConfig {
     smtp: Option<SmtpConfig>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SmtpMode {
+    StartTls,
+    TlsWrapper,
+    Plain,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -1965,9 +1972,7 @@ impl Notifier {
             .from
             .parse()
             .map_err(|err| format!("smtp from invalid: {}", err))?;
-        let mut builder = Message::builder()
-            .from(from)
-            .subject(subject);
+        let mut builder = Message::builder().from(from).subject(subject);
         for recipient in &recipients {
             let mailbox: Mailbox = recipient
                 .parse()
@@ -1978,23 +1983,53 @@ impl Notifier {
             .body(message.to_string())
             .map_err(|err| format!("smtp message build failed: {}", err))?;
 
-        let mut transport_builder = if cfg.use_starttls {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)
-                .map_err(|err| format!("smtp relay config failed: {}", err))?
-                .port(cfg.port)
+        let primary = if cfg.use_starttls {
+            SmtpMode::StartTls
+        } else if cfg.port == 465 {
+            SmtpMode::TlsWrapper
         } else {
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host).port(cfg.port)
+            SmtpMode::Plain
         };
-        if let (Some(username), Some(password)) = (&cfg.username, &cfg.password) {
-            transport_builder =
-                transport_builder.credentials(Credentials::new(username.clone(), password.clone()));
+        let mut modes = vec![primary];
+        for mode in [SmtpMode::StartTls, SmtpMode::TlsWrapper, SmtpMode::Plain] {
+            if !modes.contains(&mode) {
+                modes.push(mode);
+            }
         }
-        let transport = transport_builder.build();
-        transport
-            .send(email)
-            .await
-            .map_err(|err| format!("smtp send failed: {}", err))?;
-        Ok(())
+
+        let mut errors = Vec::new();
+        for mode in modes {
+            let transport_builder = match mode {
+                SmtpMode::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)
+                    .map_err(|err| format!("starttls config failed: {}", err))
+                    .map(|b| b.port(cfg.port)),
+                SmtpMode::TlsWrapper => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)
+                    .map_err(|err| format!("tls config failed: {}", err))
+                    .map(|b| b.port(cfg.port)),
+                SmtpMode::Plain => Ok(
+                    AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host).port(cfg.port),
+                ),
+            };
+            let mut transport_builder = match transport_builder {
+                Ok(v) => v,
+                Err(err) => {
+                    errors.push(format!("mode {}: {}", smtp_mode_label(mode), err));
+                    continue;
+                }
+            };
+            if let (Some(username), Some(password)) = (&cfg.username, &cfg.password) {
+                transport_builder = transport_builder
+                    .credentials(Credentials::new(username.clone(), password.clone()));
+            }
+            let transport = transport_builder.build();
+            match transport.send(email.clone()).await {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    errors.push(format!("mode {}: {}", smtp_mode_label(mode), err));
+                }
+            }
+        }
+        Err(format!("smtp send failed: {}", errors.join(" | ")))
     }
 }
 
@@ -2108,4 +2143,12 @@ fn slugify_ascii(value: &str) -> String {
         out = "friend".to_string();
     }
     out
+}
+
+fn smtp_mode_label(mode: SmtpMode) -> &'static str {
+    match mode {
+        SmtpMode::StartTls => "starttls",
+        SmtpMode::TlsWrapper => "tls",
+        SmtpMode::Plain => "plain",
+    }
 }
