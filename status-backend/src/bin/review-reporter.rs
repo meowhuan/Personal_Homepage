@@ -134,6 +134,30 @@ async fn run_once_cycle(
             app.id, app.site_url, decision.action, decision.review_note
         );
         if decision.action == "pending" {
+            let payload = json!({
+                "application_id": app.id,
+                "review_note": decision.review_note,
+                "send_admin_notify": true
+            });
+            match client
+                .post(format!("{}/links/review/report/manual", base.trim_end_matches('/')))
+                .header("x-token", token)
+                .json(&payload)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    eprintln!(
+                        "[review-worker] report manual app#{} status={} body={}",
+                        app.id, status, body
+                    );
+                }
+                Err(err) => {
+                    eprintln!("[review-worker] report manual app#{} failed: {}", app.id, err);
+                }
+            }
             continue;
         }
         let payload = json!({

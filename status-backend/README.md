@@ -68,6 +68,7 @@ STATUS_TOKEN=your_token
 - `POST /links/settings` (需要 token，保存 TG/SMTP 配置)
 - `POST /links/settings/test-smtp` (需要 token，发送 SMTP 测试邮件)
 - `POST /links/review/report/decision` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网上报审核结果)
+- `POST /links/review/report/manual` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网上报“待人工审核”并触发新申请提醒)
 - `POST /links/review/report/removal` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网上报下架结果)
 - `GET /links/review/report/tasks` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网拉取待审任务)
 - `GET /links/admin` (友链管理页面)
@@ -121,8 +122,10 @@ STATUS_TOKEN=your_token
 
 - 通过/拒绝/自动下架后：
   - 若申请记录有 `email` 且 SMTP 可用，则向申请者发送结果邮件
-- 申请提交时：
-  - 若 SMTP `To` 已配置，则给站长发送新申请通知
+- 自动审核 `approve/reject` 上报时：
+  - 若 SMTP `To` 已配置，会向站长邮箱推送自动审核结果摘要
+- 自动审核结果为 `pending`（需人工）上报时：
+  - 仅此时向 SMTP `To` 推送“新申请待人工审核”提醒（同申请只推送一次）
 
 `/blog` 正文字段支持两种写法（兼容）：
 - `content_md`: Markdown 原文（推荐）

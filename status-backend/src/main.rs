@@ -14,7 +14,6 @@ use lettre::{
 use reqwest::Url;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -302,6 +301,13 @@ struct ReviewRemovalReportPayload {
     send_email: Option<bool>,
 }
 
+#[derive(Deserialize)]
+struct ReviewManualReportPayload {
+    application_id: i64,
+    review_note: Option<String>,
+    send_admin_notify: Option<bool>,
+}
+
 #[derive(Serialize)]
 struct ReviewTasksResponse {
     pending_applications: Vec<PendingApplicationTask>,
@@ -343,7 +349,6 @@ struct SmtpConfig {
 
 #[derive(Clone)]
 struct Notifier {
-    http: reqwest::Client,
     tg_bot_token: Option<String>,
     tg_chat_id: Option<String>,
     smtp: Option<SmtpConfig>,
@@ -452,6 +457,7 @@ async fn main() {
             email TEXT,
             note TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
+            manual_notified INTEGER NOT NULL DEFAULT 0,
             ip TEXT,
             user_agent TEXT,
             review_note TEXT,
@@ -480,6 +486,10 @@ async fn main() {
     let _ = conn.execute("ALTER TABLE blog_posts ADD COLUMN content_md TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE friend_link_applications ADD COLUMN review_note TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN manual_notified INTEGER NOT NULL DEFAULT 0",
         [],
     );
     let _ = conn.execute(
@@ -563,6 +573,7 @@ async fn main() {
         .route("/links/settings/test-smtp", post(links_settings_test_smtp))
         .route("/links/review/report/tasks", get(links_review_report_tasks))
         .route("/links/review/report/decision", post(links_review_report_decision))
+        .route("/links/review/report/manual", post(links_review_report_manual))
         .route("/links/review/report/removal", post(links_review_report_removal))
         .route("/links/admin", get(admin_pages::links_admin_page))
         .route("/visitor", get(visitor_stats))
@@ -1237,26 +1248,6 @@ async fn links_apply(
         application_id = conn.last_insert_rowid();
     }
 
-    let message = format!(
-        "New friend-link application\nsite: {}\nurl: {}\nemail: {}\ndescription: {}\nnote: {}",
-        site_name,
-        site_url,
-        email.as_deref().unwrap_or("-"),
-        description.as_deref().unwrap_or("-"),
-        note.as_deref().unwrap_or("-")
-    );
-    let notify_cfg = {
-        let conn = state.db.lock().unwrap();
-        state.notifier.runtime_config(&conn)
-    };
-    if let Err(err) = state
-        .notifier
-        .notify_link_application(&notify_cfg, &message)
-        .await
-    {
-        tracing::warn!("link notify failed: {}", err);
-    }
-
     (
         StatusCode::CREATED,
         Json(ApiMessage {
@@ -1312,7 +1303,7 @@ async fn links_review(
     if !authorized(&headers, &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    match perform_review_decision(&state, payload, true).await {
+    match perform_review_decision(&state, payload, true, false).await {
         Ok(message) => (StatusCode::OK, Json(ApiMessage { message })).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -1339,7 +1330,14 @@ async fn links_review_report_decision(
         tags: payload.tags,
         review_note: payload.review_note,
     };
-    match perform_review_decision(&state, review_payload, payload.send_email.unwrap_or(true)).await {
+    match perform_review_decision(
+        &state,
+        review_payload,
+        payload.send_email.unwrap_or(true),
+        true,
+    )
+    .await
+    {
         Ok(message) => (StatusCode::OK, Json(ApiMessage { message })).into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
@@ -1349,6 +1347,117 @@ async fn links_review_report_decision(
         )
             .into_response(),
     }
+}
+
+async fn links_review_report_manual(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ReviewManualReportPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.review_report_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let now = now_ts();
+    let review_note = normalize_optional(payload.review_note, 280);
+    let app_row = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT site_name, site_url, email, status, manual_notified
+             FROM friend_link_applications WHERE id = ?1",
+            params![payload.application_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i32>(4)?,
+                ))
+            },
+        )
+        .ok()
+    };
+    let (site_name, site_url, _email, status, manual_notified) = match app_row {
+        Some(v) => v,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiMessage {
+                    message: "申请记录不存在".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    };
+    if status != "pending" {
+        return (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "申请状态已非 pending，跳过手动提醒".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE friend_link_applications
+             SET review_note = ?1, updated_at = ?2
+             WHERE id = ?3",
+            params![review_note, now, payload.application_id],
+        );
+    }
+
+    let should_notify = payload.send_admin_notify.unwrap_or(true) && manual_notified == 0;
+    if should_notify {
+        let notify_cfg = {
+            let conn = state.db.lock().unwrap();
+            state.notifier.runtime_config(&conn)
+        };
+        let subject = "New friend-link application (manual review required)".to_string();
+        let msg = format!(
+            "New friend-link application (manual review required)\nsite: {}\nurl: {}\nreview_note: {}",
+            site_name,
+            site_url,
+            review_note.as_deref().unwrap_or("-")
+        );
+        let send_result = if let Some(smtp_cfg) = notify_cfg.smtp.as_ref() {
+            if smtp_cfg.to.is_empty() {
+                Err("smtp to recipients is empty".to_string())
+            } else {
+                state
+                    .notifier
+                    .send_smtp(Some(smtp_cfg), &subject, &msg, None)
+                    .await
+            }
+        } else {
+            Err("smtp not configured".to_string())
+        };
+        if let Err(err) = send_result {
+            tracing::warn!("manual review smtp notify failed: {}", err);
+        } else {
+            let conn = state.db.lock().unwrap();
+            let _ = conn.execute(
+                "UPDATE friend_link_applications
+                 SET manual_notified = 1, updated_at = ?1
+                 WHERE id = ?2",
+                params![now, payload.application_id],
+            );
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: if should_notify {
+                "已标记为待人工审核并推送提醒".to_string()
+            } else {
+                "已标记为待人工审核（提醒已发送过）".to_string()
+            },
+        }),
+    )
+        .into_response()
 }
 
 async fn links_review_report_tasks(
@@ -1476,6 +1585,7 @@ async fn perform_review_decision(
     state: &AppState,
     payload: LinkReviewPayload,
     send_email: bool,
+    send_admin_smtp_notify: bool,
 ) -> Result<String, String> {
     let action = payload.action.trim().to_lowercase();
     if action != "approve" && action != "reject" {
@@ -1601,6 +1711,37 @@ async fn perform_review_decision(
         }
     } else {
         mail_note = "（申请方未提供邮箱）".to_string();
+    }
+
+    if send_admin_smtp_notify {
+        let notify_cfg = {
+            let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+            state.notifier.runtime_config(&conn)
+        };
+        if let Some(smtp_cfg) = notify_cfg.smtp.as_ref() {
+            if !smtp_cfg.to.is_empty() {
+                let subject = format!(
+                    "Auto review result: {} ({})",
+                    if action == "approve" { "APPROVE" } else { "REJECT" },
+                    site_name
+                );
+                let body = format!(
+                    "Auto review result\napplication_id: {}\naction: {}\nsite: {}\nurl: {}\nreview_note: {}",
+                    payload.application_id,
+                    action,
+                    site_name,
+                    site_url,
+                    review_note.as_deref().unwrap_or("-")
+                );
+                if let Err(err) = state
+                    .notifier
+                    .send_smtp(Some(smtp_cfg), &subject, &body, None)
+                    .await
+                {
+                    tracing::warn!("auto review admin smtp notify failed: {}", err);
+                }
+            }
+        }
     }
 
     Ok(if action == "approve" {
@@ -2091,7 +2232,6 @@ impl Notifier {
         };
 
         Self {
-            http: reqwest::Client::new(),
             tg_bot_token,
             tg_chat_id,
             smtp,
@@ -2168,42 +2308,6 @@ impl Notifier {
         }
     }
 
-    async fn notify_link_application(
-        &self,
-        cfg: &RuntimeNotifyConfig,
-        message: &str,
-    ) -> Result<(), String> {
-        let mut channel_count = 0usize;
-        let mut errors: Vec<String> = Vec::new();
-
-        if cfg.tg_bot_token.is_some() && cfg.tg_chat_id.is_some() {
-            channel_count += 1;
-            if let Err(err) = self
-                .send_tg(cfg.tg_bot_token.as_deref(), cfg.tg_chat_id.as_deref(), message)
-                .await
-            {
-                tracing::warn!("link notify tg failed: {}", err);
-                errors.push(err);
-            }
-        }
-
-        if cfg.smtp.is_some() {
-            channel_count += 1;
-            if let Err(err) = self.send_smtp(cfg.smtp.as_ref(), "New friend-link application", message, None).await {
-                tracing::warn!("link notify smtp failed: {}", err);
-                errors.push(err);
-            }
-        }
-
-        if channel_count == 0 {
-            return Ok(());
-        }
-        if !errors.is_empty() {
-            return Err(errors.join("; "));
-        }
-        Ok(())
-    }
-
     async fn notify_review_result_email(
         &self,
         smtp_cfg: Option<&SmtpConfig>,
@@ -2218,13 +2322,21 @@ impl Notifier {
         } else {
             "未通过"
         };
+        let backlink_reminder = review_note
+            .map(|v| v.to_lowercase())
+            .filter(|v| v.contains("未检测到本站链接") || v.contains("no_backlink"))
+            .map(|_| {
+                "\n\n提醒：当前未检测到你的网站包含本站链接。\n请在站点首页添加本站友链后再提交/等待复核：\nhttps://www.meowra.cn/"
+            })
+            .unwrap_or("");
         let subject = format!("友链申请审核结果：{}", status_text);
         let body = format!(
-            "你好，\n\n你提交的友链申请已完成审核。\n\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}\n\n此邮件由系统自动发送，请勿直接回复。",
+            "你好，\n\n你提交的友链申请已完成审核。\n\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}{}\n\n此邮件由系统自动发送，请勿直接回复。",
             site_name,
             site_url,
             status_text,
-            review_note.unwrap_or("-")
+            review_note.unwrap_or("-"),
+            backlink_reminder
         );
         self.send_smtp(
             smtp_cfg,
@@ -2233,35 +2345,6 @@ impl Notifier {
             Some(vec![applicant_email.to_string()]),
         )
         .await
-    }
-
-    async fn send_tg(
-        &self,
-        token: Option<&str>,
-        chat_id: Option<&str>,
-        message: &str,
-    ) -> Result<(), String> {
-        let token = token.ok_or_else(|| "tg token missing".to_string())?;
-        let chat_id = chat_id.ok_or_else(|| "tg chat id missing".to_string())?;
-        let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
-        let resp = self
-            .http
-            .post(url)
-            .json(&json!({
-                "chat_id": chat_id,
-                "text": message,
-                "disable_web_page_preview": true
-            }))
-            .send()
-            .await
-            .map_err(|err| format!("tg request failed: {}", err))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("tg response {}: {}", status, body));
-        }
-        Ok(())
     }
 
     async fn send_smtp(
