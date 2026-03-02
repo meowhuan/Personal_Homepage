@@ -150,7 +150,7 @@
   }
 }
 
-@media (min-width: 768px) and (max-width: 1299px) {
+@media (min-width: 768px) and (max-width: 1251px) {
   .cord-switch-desktop-left {
     display: flex;
     left: max(calc(env(safe-area-inset-left, 0px) + 6px), calc((100vw - min(1100px, 92vw)) / 2 + 330px));
@@ -158,10 +158,10 @@
   }
 }
 
-@media (min-width: 1300px) {
+@media (min-width: 1252px) {
   .cord-switch-desktop-right {
     display: flex;
-    right: max(calc(env(safe-area-inset-right, 0px) + 6px), calc((100vw - min(1100px, 92vw)) / 2 - 24px));
+    right: max(calc(env(safe-area-inset-right, 0px) + 6px), max(-24px, calc((100vw - min(1100px, 92vw)) / 2 - 100px)));
     left: auto;
   }
 }

@@ -305,9 +305,13 @@
                 <div><input data-avatar placeholder="头像 URL" value="${esc(item.avatar_url || "")}" /></div>
                 <div><input data-tags placeholder="标签（逗号分隔）" value="${esc(item.tags || "")}" /></div>
               </div>
+              <div class="small" data-review-stage>
+                24h回链审查：${item.backlink_deadline ? `进行中（截止 ${ts(item.backlink_deadline)}）` : `未启用/已结束${item.backlink_status ? `（${esc(item.backlink_status)}）` : ""}`}
+              </div>
               <div><textarea data-description placeholder="简介">${esc(item.description || "")}</textarea></div>
               <div class="toolbar" style="margin-bottom:0;">
                 <button class="ok" data-save-item>保存编辑</button>
+                <button class="ghost" data-cancel-stage ${item.backlink_deadline ? "" : "disabled"}>取消24h审查</button>
                 <button class="danger" data-delete-item>删除友链</button>
               </div>
             </div>
@@ -351,6 +355,29 @@
               await loadLinks();
             } catch (err) {
               setStatus(err.message || "保存失败");
+            }
+          });
+          wrap.querySelector("[data-cancel-stage]").addEventListener("click", async () => {
+            if (!item.backlink_deadline) {
+              setStatus("该站点当前不在24h回链审查阶段");
+              return;
+            }
+            if (!confirm("确认取消该站点的24h回链审查阶段？")) return;
+            try {
+              setStatus("取消24h审查中...");
+              const res = await fetch(api("/links/review/stage/cancel"), {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({ id: wrap.dataset.id })
+              });
+              if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.message || "取消失败");
+              }
+              setStatus("已取消24h回链审查");
+              await loadLinks();
+            } catch (err) {
+              setStatus(err.message || "取消失败");
             }
           });
           wrap.querySelector("[data-delete-item]").addEventListener("click", async () => {

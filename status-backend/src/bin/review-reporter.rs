@@ -1,7 +1,7 @@
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::HashMap, fs, path::PathBuf, time::Duration};
+use std::{collections::{HashMap, HashSet}, fs, path::PathBuf, time::Duration};
 
 #[derive(Deserialize)]
 struct ReviewTasksResponse {
@@ -193,8 +193,13 @@ async fn run_once_cycle(
     for link in &tasks.active_links {
         let snap = fetch_site(client, &link.url).await;
         let accessible = snap.as_ref().map(|(ok, _)| *ok).unwrap_or(false);
-        let page_lower = snap.map(|(_, html)| html.to_lowercase()).unwrap_or_default();
-        let has_backlink = contains_backlink(&page_lower, &tasks.backlink_target);
+        let has_backlink = find_backlink_in_site(
+            client,
+            &link.url,
+            &tasks.backlink_target,
+            snap.as_ref().map(|(_, html)| html.as_str()),
+        )
+        .await;
 
         if let Some(deadline) = link.backlink_deadline {
             if now >= deadline && !has_backlink {
@@ -313,7 +318,12 @@ async fn evaluate_application(
             score -= 6;
             reasons.push("SEO 基础信息偏弱".to_string());
         }
-        if contains_backlink(&lower, backlink_target) {
+        let has_backlink = if contains_backlink(&lower, backlink_target) {
+            true
+        } else {
+            find_backlink_in_site(client, &app.site_url, backlink_target, Some(&html)).await
+        };
+        if has_backlink {
             score += 10;
         } else {
             score -= 10;
@@ -534,6 +544,206 @@ async fn fetch_site(client: &reqwest::Client, site_url: &str) -> Option<(bool, S
     let ok = response.status().is_success() || response.status().is_redirection();
     let html = response.text().await.unwrap_or_default();
     Some((ok, html))
+}
+
+async fn find_backlink_in_site(
+    client: &reqwest::Client,
+    site_url: &str,
+    backlink_target: &str,
+    homepage_html: Option<&str>,
+) -> bool {
+    let base = match Url::parse(site_url) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let home_html_owned = if let Some(html) = homepage_html {
+        html.to_string()
+    } else {
+        match fetch_site(client, site_url).await {
+            Some((_, html)) => html,
+            None => return false,
+        }
+    };
+    let home_lower = home_html_owned.to_lowercase();
+    if contains_backlink(&home_lower, backlink_target) {
+        return true;
+    }
+
+    let mut candidates = collect_friend_page_candidates(&base, &home_html_owned);
+    if let Some(mut sitemap_urls) = load_sitemap_candidates(client, &base).await {
+        candidates.append(&mut sitemap_urls);
+    }
+
+    let mut visited = HashSet::new();
+    let mut checked = 0usize;
+    for url in candidates {
+        if checked >= 8 {
+            break;
+        }
+        if !visited.insert(url.clone()) {
+            continue;
+        }
+        if let Some((_, html)) = fetch_site(client, &url).await {
+            checked += 1;
+            if contains_backlink(&html.to_lowercase(), backlink_target) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn collect_friend_page_candidates(base: &Url, html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let keywords = ["friend", "friends", "link", "links", "blogroll", "友链", "友情链接"];
+    for href in extract_hrefs(html) {
+        if is_non_web_href(&href) {
+            continue;
+        }
+        let lower = href.to_lowercase();
+        if !keywords.iter().any(|k| lower.contains(k)) {
+            continue;
+        }
+        if let Some(url) = resolve_same_site_url(base, &href) {
+            if seen.insert(url.clone()) {
+                out.push(url);
+            }
+        }
+    }
+    for path in [
+        "/friends",
+        "/friend",
+        "/links",
+        "/link",
+        "/friend-links",
+        "/blogroll",
+        "/youqing",
+    ] {
+        if let Ok(url) = base.join(path) {
+            let s = normalize_url_for_fetch(url);
+            if seen.insert(s.clone()) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
+async fn load_sitemap_candidates(client: &reqwest::Client, base: &Url) -> Option<Vec<String>> {
+    let sitemap_url = base.join("/sitemap.xml").ok()?;
+    let (_, xml) = fetch_site(client, sitemap_url.as_str()).await?;
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let keywords = ["friend", "friends", "link", "links", "blogroll", "友链", "友情链接"];
+    for loc in extract_sitemap_locs(&xml) {
+        let lower = loc.to_lowercase();
+        if !keywords.iter().any(|k| lower.contains(k)) {
+            continue;
+        }
+        if let Some(url) = resolve_same_site_url(base, &loc) {
+            if seen.insert(url.clone()) {
+                out.push(url);
+            }
+        }
+        if out.len() >= 6 {
+            break;
+        }
+    }
+    Some(out)
+}
+
+fn extract_hrefs(html: &str) -> Vec<String> {
+    let lower = html.to_lowercase();
+    let bytes = lower.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 5 < bytes.len() {
+        if &bytes[i..i + 5] != b"href=" {
+            i += 1;
+            continue;
+        }
+        i += 5;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let quote = bytes[i];
+        let (start, end) = if quote == b'"' || quote == b'\'' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != quote {
+                j += 1;
+            }
+            (start, j)
+        } else {
+            let start = i;
+            let mut j = start;
+            while j < bytes.len()
+                && !bytes[j].is_ascii_whitespace()
+                && bytes[j] != b'>'
+                && bytes[j] != b'"'
+                && bytes[j] != b'\''
+            {
+                j += 1;
+            }
+            (start, j)
+        };
+        if start < end && end <= html.len() {
+            let candidate = html[start..end].trim();
+            if !candidate.is_empty() {
+                out.push(candidate.to_string());
+            }
+        }
+        i = end.saturating_add(1);
+    }
+    out
+}
+
+fn extract_sitemap_locs(xml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<loc>") {
+        let after = &rest[start + 5..];
+        if let Some(end) = after.find("</loc>") {
+            let loc = after[..end].trim();
+            if !loc.is_empty() {
+                out.push(loc.to_string());
+            }
+            rest = &after[end + 6..];
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+fn is_non_web_href(href: &str) -> bool {
+    let lower = href.trim().to_lowercase();
+    lower.starts_with('#')
+        || lower.starts_with("javascript:")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+}
+
+fn resolve_same_site_url(base: &Url, raw: &str) -> Option<String> {
+    let parsed = Url::parse(raw).or_else(|_| base.join(raw)).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let base_host = base.host_str()?.to_lowercase();
+    let host = parsed.host_str()?.to_lowercase();
+    if host != base_host {
+        return None;
+    }
+    Some(normalize_url_for_fetch(parsed))
+}
+
+fn normalize_url_for_fetch(mut url: Url) -> String {
+    url.set_fragment(None);
+    url.to_string()
 }
 
 fn contains_backlink(page_lower: &str, backlink_target: &str) -> bool {

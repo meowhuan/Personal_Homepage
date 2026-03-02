@@ -8,13 +8,15 @@ use axum::{
 };
 use chrono::{Datelike, Utc};
 use lettre::{
-    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    message::{header::ContentType, Mailbox, MultiPart, SinglePart},
+    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use reqwest::Url;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -181,6 +183,8 @@ struct FriendLink {
     tags: Option<String>,
     sort_order: i64,
     created_at: i64,
+    backlink_status: Option<String>,
+    backlink_deadline: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -248,6 +252,11 @@ struct LinkUpdatePayload {
 
 #[derive(Deserialize)]
 struct LinkDeletePayload {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct LinkReviewStageCancelPayload {
     id: String,
 }
 
@@ -569,6 +578,7 @@ async fn main() {
         .route("/links/sort", post(links_sort))
         .route("/links/update", post(links_update))
         .route("/links/delete", post(links_delete))
+        .route("/links/review/stage/cancel", post(links_review_stage_cancel))
         .route("/links/settings", get(links_settings_get).post(links_settings_set))
         .route("/links/settings/test-smtp", post(links_settings_test_smtp))
         .route("/links/review/report/tasks", get(links_review_report_tasks))
@@ -1103,7 +1113,8 @@ async fn blog_update(
 async fn links_list(State(state): State<AppState>) -> impl IntoResponse {
     let conn = state.db.lock().unwrap();
     let mut stmt = match conn.prepare(
-        "SELECT id, name, url, avatar_url, description, tags, sort_order, created_at
+        "SELECT id, name, url, avatar_url, description, tags, sort_order, created_at,
+                backlink_status, backlink_deadline
          FROM friend_links
          ORDER BY sort_order ASC, created_at DESC",
     ) {
@@ -1121,6 +1132,8 @@ async fn links_list(State(state): State<AppState>) -> impl IntoResponse {
             tags: row.get(5)?,
             sort_order: row.get(6)?,
             created_at: row.get(7)?,
+            backlink_status: row.get(8)?,
+            backlink_deadline: row.get(9)?,
         })
     }) {
         Ok(rows) => rows,
@@ -1639,7 +1652,21 @@ async fn perform_review_decision(
 
         if action == "approve" {
             let link_id = format!("link-{}-{}", slugify_ascii(&site_name), payload.application_id);
-            let tags = normalize_optional(payload.tags, 120);
+            let manual_tags = normalize_optional(payload.tags, 120);
+            let tags = if send_admin_smtp_notify {
+                merge_link_tags(
+                    manual_tags,
+                    extract_auto_link_tags(
+                        &site_name,
+                        &site_url,
+                        description.as_deref(),
+                        final_review_note.as_deref(),
+                    ),
+                    120,
+                )
+            } else {
+                manual_tags
+            };
             let sort_order = payload.sort_order.unwrap_or(now);
             let backlink_window = state.auto_review.backlink_window_secs.max(3600);
             if tx
@@ -1750,9 +1777,16 @@ async fn perform_review_decision(
                     site_url,
                     final_review_note.as_deref().unwrap_or("-")
                 );
+                let html = build_auto_review_admin_html(
+                    payload.application_id,
+                    &action,
+                    &site_name,
+                    &site_url,
+                    final_review_note.as_deref().unwrap_or("-"),
+                );
                 if let Err(err) = state
                     .notifier
-                    .send_smtp(Some(smtp_cfg), &subject, &body, None)
+                    .send_smtp_rich(Some(smtp_cfg), &subject, &body, Some(&html), None)
                     .await
                 {
                     tracing::warn!("auto review admin smtp notify failed: {}", err);
@@ -1921,6 +1955,52 @@ async fn links_delete(
         StatusCode::OK,
         Json(ApiMessage {
             message: "友链已删除".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_review_stage_cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkReviewStageCancelPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let id = payload.id.trim();
+    if id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "id 不能为空".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let now = now_ts();
+    let conn = state.db.lock().unwrap();
+    let updated = conn
+        .execute(
+            "UPDATE friend_links
+             SET backlink_status = 'manual_skip_backlink', backlink_deadline = NULL, backlink_checked_at = ?1
+             WHERE id = ?2",
+            params![now, id],
+        )
+        .unwrap_or(0);
+    if updated == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                message: "友链不存在".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: "已取消该站点的 24h 回链审查阶段".to_string(),
         }),
     )
         .into_response()
@@ -2349,19 +2429,42 @@ impl Notifier {
                 "\n\n提醒：当前未检测到你的网站包含本站链接。\n请在站点首页添加本站友链后再提交/等待复核：\nhttps://www.meowra.cn/"
             })
             .unwrap_or("");
+        let review_scope_note = if action == "approve" {
+            "\n\n审查说明：\n- 系统会优先检查提交链接首页是否包含本站链接。\n- 若首页未命中，会继续尝试首页中友链相关页面（如 friends/links）与 sitemap.xml 中相关页面。\n- 若你将友链放置在上述范围之外，可能无法被自动识别。\n- 如需人工确认，请回信至管理员邮箱：meowhuan@qq.com"
+        } else {
+            ""
+        };
         let subject = format!("友链申请审核结果：{}", status_text);
-        let body = format!(
-            "你好，\n\n你提交的友链申请已完成审核。\n\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}{}\n\n此邮件由系统自动发送，请勿直接回复。",
+        let plain_body = format!(
+            "你好，\n\n你提交的友链申请已完成审核。\n\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}{}{}\n\n此邮件由系统自动发送，请勿直接回复。",
             site_name,
             site_url,
             status_text,
             review_note.unwrap_or("-"),
-            backlink_reminder
+            backlink_reminder,
+            review_scope_note
         );
-        self.send_smtp(
+        let html_body = build_review_result_html(
+            site_name,
+            site_url,
+            status_text,
+            review_note.unwrap_or("-"),
+            if backlink_reminder.is_empty() {
+                None
+            } else {
+                Some(backlink_reminder)
+            },
+            if review_scope_note.is_empty() {
+                None
+            } else {
+                Some(review_scope_note)
+            },
+        );
+        self.send_smtp_rich(
             smtp_cfg,
             &subject,
-            &body,
+            &plain_body,
+            Some(&html_body),
             Some(vec![applicant_email.to_string()]),
         )
         .await
@@ -2372,6 +2475,18 @@ impl Notifier {
         cfg: Option<&SmtpConfig>,
         subject: &str,
         message: &str,
+        override_to: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        self.send_smtp_rich(cfg, subject, message, None, override_to)
+            .await
+    }
+
+    async fn send_smtp_rich(
+        &self,
+        cfg: Option<&SmtpConfig>,
+        subject: &str,
+        plain_message: &str,
+        html_message: Option<&str>,
         override_to: Option<Vec<String>>,
     ) -> Result<(), String> {
         let cfg = cfg.ok_or_else(|| "smtp config missing".to_string())?;
@@ -2390,9 +2505,23 @@ impl Notifier {
                 .map_err(|err| format!("smtp to invalid: {}", err))?;
             builder = builder.to(mailbox);
         }
-        let email = builder
-            .body(message.to_string())
-            .map_err(|err| format!("smtp message build failed: {}", err))?;
+        let email = if let Some(html) = html_message {
+            builder
+                .multipart(
+                    MultiPart::alternative()
+                        .singlepart(SinglePart::plain(plain_message.to_string()))
+                        .singlepart(
+                            SinglePart::builder()
+                                .header(ContentType::TEXT_HTML)
+                                .body(html.to_string()),
+                        ),
+                )
+                .map_err(|err| format!("smtp html message build failed: {}", err))?
+        } else {
+            builder
+                .body(plain_message.to_string())
+                .map_err(|err| format!("smtp message build failed: {}", err))?
+        };
 
         let primary = if cfg.use_starttls {
             SmtpMode::StartTls
@@ -2442,6 +2571,64 @@ impl Notifier {
         }
         Err(format!("smtp send failed: {}", errors.join(" | ")))
     }
+}
+
+fn build_review_result_html(
+    site_name: &str,
+    site_url: &str,
+    status_text: &str,
+    review_note: &str,
+    backlink_reminder: Option<&str>,
+    review_scope_note: Option<&str>,
+) -> String {
+    let status_color = if status_text == "已通过" {
+        "#2f8a58"
+    } else {
+        "#a03555"
+    };
+    let reminder_html = backlink_reminder
+        .map(|v| format!("<div style=\"margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff6db;color:#7a5b10;line-height:1.6;\">{}</div>", escape_html(v).replace('\n', "<br />")))
+        .unwrap_or_default();
+    let scope_html = review_scope_note
+        .map(|v| format!("<div style=\"margin-top:12px;padding:10px 12px;border-radius:10px;background:#f6f4ff;color:#3d3567;line-height:1.6;\">{}</div>", escape_html(v).replace('\n', "<br />")))
+        .unwrap_or_default();
+    format!(
+        "<!doctype html><html><body style=\"margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;\"><div style=\"max-width:640px;margin:24px auto;padding:0 12px;\"><div style=\"border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);\"><div style=\"padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;\">Meow Links 审核通知</div><div style=\"padding:16px;\"><div style=\"display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;\">{status}</div><div style=\"margin-top:14px;line-height:1.75;\"><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href=\"{url}\" style=\"color:#5b4cc4;text-decoration:none;\">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div>{reminder}{scope}<div style=\"margin-top:14px;font-size:12px;color:#7b6b7a;\">此邮件由系统自动发送，请勿直接回复。</div></div></div></div></body></html>",
+        status = escape_html(status_text),
+        name = escape_html(site_name),
+        url = escape_html(site_url),
+        note = escape_html(review_note),
+        reminder = reminder_html,
+        scope = scope_html,
+    )
+}
+
+fn build_auto_review_admin_html(
+    application_id: i64,
+    action: &str,
+    site_name: &str,
+    site_url: &str,
+    review_note: &str,
+) -> String {
+    let action_text = if action == "approve" { "APPROVE" } else { "REJECT" };
+    let status_color = if action == "approve" { "#2f8a58" } else { "#a03555" };
+    format!(
+        "<!doctype html><html><body style=\"margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;\"><div style=\"max-width:640px;margin:24px auto;padding:0 12px;\"><div style=\"border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);\"><div style=\"padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;\">Meow Links 自动审核结果</div><div style=\"padding:16px;\"><div style=\"display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;\">{action_text}</div><div style=\"margin-top:14px;line-height:1.75;\"><div><strong>application_id：</strong>{app_id}</div><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href=\"{url}\" style=\"color:#5b4cc4;text-decoration:none;\">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div><div style=\"margin-top:14px;font-size:12px;color:#7b6b7a;\">此邮件由系统自动发送。</div></div></div></div></body></html>",
+        status_color = status_color,
+        action_text = escape_html(action_text),
+        app_id = application_id,
+        name = escape_html(site_name),
+        url = escape_html(site_url),
+        note = escape_html(review_note),
+    )
+}
+
+fn escape_html(raw: &str) -> String {
+    raw.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 impl AutoReviewConfig {
@@ -2561,6 +2748,182 @@ fn split_recipients(raw: &str) -> Vec<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .collect()
+}
+
+fn merge_link_tags(manual: Option<String>, auto: Option<String>, max_len: usize) -> Option<String> {
+    let mut seen = HashSet::new();
+    let mut merged = Vec::new();
+    for source in [manual, auto].into_iter().flatten() {
+        for tag in split_tag_tokens(&source) {
+            let key = tag.to_lowercase();
+            if seen.insert(key) {
+                merged.push(tag);
+            }
+        }
+    }
+    join_tags_with_limit(merged, max_len)
+}
+
+fn extract_auto_link_tags(
+    site_name: &str,
+    site_url: &str,
+    description: Option<&str>,
+    review_note: Option<&str>,
+) -> Option<String> {
+    let mut seen = HashSet::new();
+    let mut tags = Vec::new();
+
+    if let Ok(url) = Url::parse(site_url) {
+        if let Some(host) = url.host_str() {
+            let host = host.trim().to_lowercase();
+            let host_no_www = host.strip_prefix("www.").unwrap_or(&host).to_string();
+            push_tag(&mut tags, &mut seen, host_no_www);
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() >= 2 {
+                let root = parts[parts.len() - 2].to_string();
+                push_tag(&mut tags, &mut seen, root);
+            }
+        }
+    }
+
+    collect_keywords(site_name, &mut tags, &mut seen);
+    if let Some(text) = description {
+        collect_keywords(text, &mut tags, &mut seen);
+    }
+    if let Some(text) = review_note {
+        collect_keywords(text, &mut tags, &mut seen);
+    }
+
+    join_tags_with_limit(tags, 120)
+}
+
+fn collect_keywords(text: &str, tags: &mut Vec<String>, seen: &mut HashSet<String>) {
+    let mut ascii_buf = String::new();
+    let mut cjk_buf = String::new();
+    let flush_ascii = |buf: &mut String, tags: &mut Vec<String>, seen: &mut HashSet<String>| {
+        if buf.is_empty() {
+            return;
+        }
+        let token = buf.to_lowercase();
+        buf.clear();
+        if token.len() < 2 || token.len() > 24 || is_ascii_stopword(&token) {
+            return;
+        }
+        push_tag(tags, seen, token);
+    };
+    let flush_cjk = |buf: &mut String, tags: &mut Vec<String>, seen: &mut HashSet<String>| {
+        if buf.is_empty() {
+            return;
+        }
+        let token = buf.clone();
+        buf.clear();
+        let len = token.chars().count();
+        if !(2..=8).contains(&len) || is_cjk_stopword(&token) {
+            return;
+        }
+        push_tag(tags, seen, token);
+    };
+
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
+            ascii_buf.push(ch);
+            flush_cjk(&mut cjk_buf, tags, seen);
+            continue;
+        }
+        if is_cjk_char(ch) {
+            cjk_buf.push(ch);
+            flush_ascii(&mut ascii_buf, tags, seen);
+            continue;
+        }
+        flush_ascii(&mut ascii_buf, tags, seen);
+        flush_cjk(&mut cjk_buf, tags, seen);
+    }
+    flush_ascii(&mut ascii_buf, tags, seen);
+    flush_cjk(&mut cjk_buf, tags, seen);
+}
+
+fn split_tag_tokens(raw: &str) -> Vec<String> {
+    raw.split(|c| c == ',' || c == '，' || c == ';' || c == '；' || c == '|' || c == '/' || c == '#')
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+fn join_tags_with_limit(tags: Vec<String>, max_len: usize) -> Option<String> {
+    let mut out = String::new();
+    for tag in tags.into_iter().take(8) {
+        if out.is_empty() {
+            if tag.chars().count() > max_len {
+                continue;
+            }
+            out.push_str(&tag);
+            continue;
+        }
+        let next = format!("{}, {}", out, tag);
+        if next.chars().count() > max_len {
+            break;
+        }
+        out = next;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn push_tag(tags: &mut Vec<String>, seen: &mut HashSet<String>, tag: String) {
+    let trimmed = tag.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let key = trimmed.to_lowercase();
+    if seen.insert(key) {
+        tags.push(trimmed.to_string());
+    }
+}
+
+fn is_cjk_char(ch: char) -> bool {
+    ('\u{4E00}'..='\u{9FFF}').contains(&ch)
+}
+
+fn is_ascii_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "http"
+            | "https"
+            | "www"
+            | "com"
+            | "cn"
+            | "net"
+            | "org"
+            | "the"
+            | "and"
+            | "for"
+            | "with"
+            | "from"
+            | "blog"
+            | "site"
+            | "home"
+    )
+}
+
+fn is_cjk_stopword(token: &str) -> bool {
+    matches!(
+        token,
+        "网站"
+            | "站点"
+            | "首页"
+            | "友链"
+            | "通过"
+            | "审核"
+            | "申请"
+            | "系统"
+            | "自动"
+            | "人工"
+            | "检测"
+            | "链接"
+    )
 }
 
 fn slugify_ascii(value: &str) -> String {
