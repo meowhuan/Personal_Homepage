@@ -110,8 +110,8 @@
 
 .cord-switch {
   position: fixed;
-  top: 4px;
-  right: 280px;
+  top: calc(env(safe-area-inset-top, 0px) + 6px);
+  right: calc((100vw - min(1100px, 92vw)) / 2 - 18px);
   transform: none;
   display: flex;
   flex-direction: column;
@@ -176,7 +176,8 @@
 
 @media (max-width: 640px) {
   .cord-switch {
-    right: 100px;
+    top: calc(env(safe-area-inset-top, 0px) + 4px);
+    right: calc((100vw - min(1100px, 92vw)) / 2 - 8px);
   }
 }
 
