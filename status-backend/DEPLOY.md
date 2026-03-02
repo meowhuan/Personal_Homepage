@@ -121,3 +121,27 @@ sudo systemctl enable --now review-reporter
 
 - `REVIEW_LOOP_INTERVAL_SEC` (default `300`)
 - `REVIEW_LOCAL_STATE` (default `review-worker-state.json`)
+- `REVIEW_SEO_PROVIDER` (optional: `none`/`generic`/`serpapi`, default `none`)
+- `REVIEW_SEO_MAX_BONUS` (optional, default `12`, range `1~30`)
+
+当 `REVIEW_SEO_PROVIDER=generic` 时：
+- `REVIEW_SEO_API_URL` (required)
+- `REVIEW_SEO_API_KEY` (optional)
+- `REVIEW_SEO_API_KEY_HEADER` (optional, default `Authorization`)
+
+当 `REVIEW_SEO_PROVIDER=serpapi` 时：
+- `REVIEW_SERPAPI_KEY` (required)
+- `REVIEW_SERPAPI_ENDPOINT` (optional, default `https://serpapi.com/search.json`)
+- `REVIEW_SERPAPI_ENGINE` (optional, default `google`)
+- `REVIEW_SERPAPI_HL` (optional, default `zh-cn`)
+- `REVIEW_SERPAPI_GL` (optional, default `cn`)
+- `REVIEW_SERPAPI_NUM` (optional, default `10`, range `5~20`)
+
+第三方 SEO API（`generic` provider）返回 JSON 约定（最小）：
+
+```json
+{
+  "score": 78,
+  "reason": "index coverage and keyword profile look good"
+}
+```

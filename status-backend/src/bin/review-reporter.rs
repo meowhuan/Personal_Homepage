@@ -36,6 +36,36 @@ struct LocalState {
     unreachable_since: HashMap<String, i64>,
 }
 
+#[derive(Clone)]
+struct SeoApiConfig {
+    url: String,
+    api_key: Option<String>,
+    api_key_header: String,
+    max_bonus: i32,
+}
+
+#[derive(Clone)]
+struct SerpApiConfig {
+    api_key: String,
+    endpoint: String,
+    engine: String,
+    hl: String,
+    gl: String,
+    num: u8,
+    max_bonus: i32,
+}
+
+#[derive(Clone)]
+enum SeoProviderConfig {
+    Generic(SeoApiConfig),
+    SerpApi(SerpApiConfig),
+}
+
+#[derive(Clone)]
+struct WorkerConfig {
+    seo_provider: Option<SeoProviderConfig>,
+}
+
 #[tokio::main]
 async fn main() {
     let base = std::env::var("REVIEW_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:7999".to_string());
@@ -48,6 +78,7 @@ async fn main() {
     let state_file = std::env::var("REVIEW_LOCAL_STATE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("review-worker-state.json"));
+    let worker_config = WorkerConfig::from_env();
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -55,7 +86,7 @@ async fn main() {
         .expect("build client");
 
     loop {
-        if let Err(err) = run_once(&client, &base, &token, &state_file).await {
+        if let Err(err) = run_once(&client, &base, &token, &state_file, &worker_config).await {
             eprintln!("[review-worker] run_once error: {}", err);
         }
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
@@ -67,6 +98,7 @@ async fn run_once(
     base: &str,
     token: &str,
     state_file: &PathBuf,
+    worker_config: &WorkerConfig,
 ) -> Result<(), String> {
     let mut state = load_state(state_file);
     let tasks: ReviewTasksResponse = client
@@ -80,7 +112,7 @@ async fn run_once(
         .map_err(|e| format!("decode tasks failed: {}", e))?;
 
     for app in &tasks.pending_applications {
-        let decision = evaluate_application(client, app, &tasks.backlink_target).await;
+        let decision = evaluate_application(client, app, &tasks.backlink_target, worker_config).await;
         if decision.action == "pending" {
             continue;
         }
@@ -163,6 +195,7 @@ async fn evaluate_application(
     client: &reqwest::Client,
     app: &PendingApplicationTask,
     backlink_target: &str,
+    worker_config: &WorkerConfig,
 ) -> Decision {
     let mut score = 50;
     let mut reasons: Vec<String> = Vec::new();
@@ -228,6 +261,23 @@ async fn evaluate_application(
         reasons.push("站点主页抓取失败".to_string());
     }
 
+    if let Some(seo_cfg) = &worker_config.seo_provider {
+        match fetch_third_party_seo_score(client, seo_cfg, app).await {
+            Ok((remote_score, reason)) => {
+                let max_bonus = match seo_cfg {
+                    SeoProviderConfig::Generic(cfg) => cfg.max_bonus,
+                    SeoProviderConfig::SerpApi(cfg) => cfg.max_bonus,
+                };
+                let delta = map_remote_score_to_delta(remote_score, max_bonus);
+                score += delta;
+                reasons.push(format!("第三方SEO={}({:+}) {}", remote_score, delta, reason.unwrap_or_default()));
+            }
+            Err(err) => {
+                reasons.push(format!("第三方SEO不可用({})", err));
+            }
+        }
+    }
+
     let action = if score >= 80 {
         "approve"
     } else if score < 40 {
@@ -240,6 +290,138 @@ async fn evaluate_application(
         sort_order: if action == "approve" { Some(now_ts()) } else { None },
         review_note: format!("auto-score={}；{}", score, reasons.join("；")),
     }
+}
+
+async fn fetch_third_party_seo_score(
+    client: &reqwest::Client,
+    cfg: &SeoProviderConfig,
+    app: &PendingApplicationTask,
+) -> Result<(i32, Option<String>), String> {
+    match cfg {
+        SeoProviderConfig::Generic(cfg) => fetch_generic_seo_score(client, cfg, app).await,
+        SeoProviderConfig::SerpApi(cfg) => fetch_serpapi_seo_score(client, cfg, app).await,
+    }
+}
+
+async fn fetch_generic_seo_score(
+    client: &reqwest::Client,
+    cfg: &SeoApiConfig,
+    app: &PendingApplicationTask,
+) -> Result<(i32, Option<String>), String> {
+    let mut request = client
+        .post(&cfg.url)
+        .json(&json!({
+            "url": app.site_url,
+            "site_name": app.site_name,
+            "description": app.description.clone().unwrap_or_default(),
+            "note": app.note.clone().unwrap_or_default()
+        }));
+    if let Some(api_key) = &cfg.api_key {
+        request = request.header(&cfg.api_key_header, api_key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("http {} {}", status, body));
+    }
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("decode failed: {}", e))?;
+    let score = value
+        .get("score")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| "missing score field".to_string())? as i32;
+    let reason = value
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_string());
+    Ok((score.clamp(0, 100), reason))
+}
+
+async fn fetch_serpapi_seo_score(
+    client: &reqwest::Client,
+    cfg: &SerpApiConfig,
+    app: &PendingApplicationTask,
+) -> Result<(i32, Option<String>), String> {
+    let domain = Url::parse(&app.site_url)
+        .ok()
+        .and_then(|u| u.host_str().map(|v| v.to_lowercase()))
+        .ok_or_else(|| "invalid site url for serpapi".to_string())?;
+    let query = format!("site:{} {}", domain, app.site_name);
+    let num_str = cfg.num.to_string();
+    let params = [
+        ("engine", cfg.engine.as_str()),
+        ("q", query.as_str()),
+        ("api_key", cfg.api_key.as_str()),
+        ("hl", cfg.hl.as_str()),
+        ("gl", cfg.gl.as_str()),
+        ("num", num_str.as_str()),
+    ];
+    let response = client
+        .get(&cfg.endpoint)
+        .query(&params)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("http {} {}", status, body));
+    }
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("decode failed: {}", e))?;
+
+    let organic = value
+        .get("organic_results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let total_hits = organic.len() as i32;
+    let first_match = organic.iter().take(3).any(|item| {
+        item.get("link")
+            .and_then(|v| v.as_str())
+            .and_then(|link| Url::parse(link).ok())
+            .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+            .is_some_and(|h| h == domain || h.ends_with(&format!(".{}", domain)))
+    });
+    let has_any_match = organic.iter().any(|item| {
+        item.get("link")
+            .and_then(|v| v.as_str())
+            .and_then(|link| Url::parse(link).ok())
+            .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+            .is_some_and(|h| h == domain || h.ends_with(&format!(".{}", domain)))
+    });
+    let mut score = 45;
+    if has_any_match {
+        score += 25;
+    } else {
+        score -= 15;
+    }
+    if first_match {
+        score += 20;
+    }
+    if total_hits >= 5 {
+        score += 10;
+    } else if total_hits == 0 {
+        score -= 15;
+    }
+    let reason = format!(
+        "serpapi: domain={}, results={}, top3_match={}",
+        domain, total_hits, first_match
+    );
+    Ok((score.clamp(0, 100), Some(reason)))
+}
+
+fn map_remote_score_to_delta(remote_score: i32, max_bonus: i32) -> i32 {
+    let centered = remote_score.clamp(0, 100) - 50;
+    (centered * max_bonus) / 50
 }
 
 async fn report_removal(
@@ -340,5 +522,77 @@ fn load_state(path: &PathBuf) -> LocalState {
 fn save_state(path: &PathBuf, state: &LocalState) {
     if let Ok(text) = serde_json::to_string_pretty(state) {
         let _ = fs::write(path, text);
+    }
+}
+
+impl WorkerConfig {
+    fn from_env() -> Self {
+        let provider = std::env::var("REVIEW_SEO_PROVIDER")
+            .ok()
+            .map(|v| v.trim().to_lowercase())
+            .unwrap_or_else(|| "none".to_string());
+        let max_bonus = std::env::var("REVIEW_SEO_MAX_BONUS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(12)
+            .clamp(1, 30);
+        let seo_provider = match provider.as_str() {
+            "generic" => std::env::var("REVIEW_SEO_API_URL")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .map(|url| {
+                    SeoProviderConfig::Generic(SeoApiConfig {
+                        url,
+                        api_key: std::env::var("REVIEW_SEO_API_KEY")
+                            .ok()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty()),
+                        api_key_header: std::env::var("REVIEW_SEO_API_KEY_HEADER")
+                            .ok()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or_else(|| "Authorization".to_string()),
+                        max_bonus,
+                    })
+                }),
+            "serpapi" => std::env::var("REVIEW_SERPAPI_KEY")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .map(|api_key| {
+                    SeoProviderConfig::SerpApi(SerpApiConfig {
+                        api_key,
+                        endpoint: std::env::var("REVIEW_SERPAPI_ENDPOINT")
+                            .ok()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or_else(|| "https://serpapi.com/search.json".to_string()),
+                        engine: std::env::var("REVIEW_SERPAPI_ENGINE")
+                            .ok()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or_else(|| "google".to_string()),
+                        hl: std::env::var("REVIEW_SERPAPI_HL")
+                            .ok()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or_else(|| "zh-cn".to_string()),
+                        gl: std::env::var("REVIEW_SERPAPI_GL")
+                            .ok()
+                            .map(|v| v.trim().to_string())
+                            .filter(|v| !v.is_empty())
+                            .unwrap_or_else(|| "cn".to_string()),
+                        num: std::env::var("REVIEW_SERPAPI_NUM")
+                            .ok()
+                            .and_then(|v| v.parse::<u8>().ok())
+                            .map(|v| v.clamp(5, 20))
+                            .unwrap_or(10),
+                        max_bonus,
+                    })
+                }),
+            _ => None,
+        };
+        Self { seo_provider }
     }
 }

@@ -76,6 +76,53 @@ STATUS_TOKEN=your_token
 审查拆分：公网后端不再主动抓取外站（避免暴露公网服务器 IP）。请将审查任务部署在内网服务，由内网服务调用 `.../review/report/...` 接口将审核/下架结果上报回公网后端。
 内网审查服务（`review-reporter`）的发行版部署与 systemd 常驻配置见 `status-backend/DEPLOY.md`。
 
+## 审核规则（当前实现）
+
+当前自动审核由内网 `review-reporter` 执行，公网后端仅接收上报结果。
+
+### 1) 评分制自动审核（pending applications）
+
+- 初始分：`50`
+- 域名风险（`localhost` / 内网段 / `.local`）：`-40`
+- 命中垃圾关键词（博彩/代刷/色情等）：`-80`
+- 简介长度：
+  - `8~180` 字：`+12`
+  - 其它：`-10`
+- 头像 URL 合法（http/https）：`+4`
+- 抓取主页：
+  - 请求成功且状态码 2xx/3xx：`+18`
+  - 请求成功但状态码异常：`-24`
+  - 请求失败：`-25`
+- 页面基础 SEO：
+  - 含 `<title>`：`+5`
+  - 含 `description`：`+5`
+  - 含 `meta`：`+6`（否则 `-6`）
+- 包含本站链接（`LINK_BACKLINK_TARGET`）：`+10`，否则 `-10`
+- 第三方 SEO 接口（可选，内网 worker 配置后生效）：
+  - `REVIEW_SEO_PROVIDER=generic`：调用自定义评分接口，返回 `score (0~100)`
+  - `REVIEW_SEO_PROVIDER=serpapi`：调用 SerpAPI 搜索结果进行扩展评分
+  - 按 `REVIEW_SEO_MAX_BONUS` 折算为加减分
+  - 折算公式：`delta = ((score - 50) * max_bonus) / 50`
+
+决策阈值（当前内网 worker 固定）：
+- `score >= 80`：自动 `approve`
+- `score < 40`：自动 `reject`
+- 其余：保持 `pending`（人工审核）
+
+### 2) 通过后的回查与下架
+
+- 回链检查（默认 24h，`LINK_BACKLINK_ENFORCE_HOURS`）：
+  - 若到期仍未检测到本站链接，自动下架（`removed_no_backlink`）
+- 可访问性检查（默认 72h，由内网 worker 侧 `unreachable` 逻辑控制）：
+  - 连续不可访问达到阈值后自动下架（`removed_unreachable`）
+
+### 3) 邮件通知触发
+
+- 通过/拒绝/自动下架后：
+  - 若申请记录有 `email` 且 SMTP 可用，则向申请者发送结果邮件
+- 申请提交时：
+  - 若 SMTP `To` 已配置，则给站长发送新申请通知
+
 `/blog` 正文字段支持两种写法（兼容）：
 - `content_md`: Markdown 原文（推荐）
 - `content`: 字符串数组（旧格式，仍可用）
