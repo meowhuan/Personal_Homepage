@@ -27,7 +27,9 @@ use tracing_subscriber::EnvFilter;
 struct AppState {
     db: Arc<Mutex<Connection>>,
     token: String,
+    review_report_token: String,
     notifier: Arc<Notifier>,
+    auto_review: Arc<AutoReviewConfig>,
 }
 
 #[derive(Deserialize)]
@@ -281,6 +283,57 @@ struct SmtpTestPayload {
     recipient: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ReviewDecisionReportPayload {
+    application_id: i64,
+    action: String,
+    sort_order: Option<i64>,
+    tags: Option<String>,
+    review_note: Option<String>,
+    send_email: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ReviewRemovalReportPayload {
+    link_id: String,
+    application_id: Option<i64>,
+    app_status: Option<String>,
+    reason: Option<String>,
+    send_email: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReviewTasksResponse {
+    pending_applications: Vec<PendingApplicationTask>,
+    active_links: Vec<ActiveLinkTask>,
+    now_ts: i64,
+    backlink_target: String,
+    backlink_enforce_hours: i64,
+    unreachable_enforce_hours: i64,
+}
+
+#[derive(Serialize)]
+struct PendingApplicationTask {
+    id: i64,
+    site_name: String,
+    site_url: String,
+    avatar_url: Option<String>,
+    description: Option<String>,
+    email: Option<String>,
+    note: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Serialize)]
+struct ActiveLinkTask {
+    id: String,
+    name: String,
+    url: String,
+    application_id: Option<i64>,
+    backlink_deadline: Option<i64>,
+    created_at: i64,
+}
+
 #[derive(Clone)]
 struct SmtpConfig {
     host: String,
@@ -307,6 +360,11 @@ struct RuntimeNotifyConfig {
     smtp: Option<SmtpConfig>,
 }
 
+#[derive(Clone)]
+struct AutoReviewConfig {
+    backlink_window_secs: i64,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SmtpMode {
     StartTls,
@@ -322,6 +380,8 @@ async fn main() {
 
     let db_path = std::env::var("STATUS_DB").unwrap_or_else(|_| "status.db".to_string());
     let token = std::env::var("STATUS_TOKEN").unwrap_or_else(|_| "KFCVME50".to_string());
+    let review_report_token =
+        std::env::var("LINK_REVIEW_REPORT_TOKEN").unwrap_or_else(|_| token.clone());
     let port = std::env::var("STATUS_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -329,6 +389,7 @@ async fn main() {
     let build_version =
         std::env::var("STATUS_BUILD").unwrap_or_else(|_| "status-backend v1.2-music".to_string());
     let notifier = Arc::new(Notifier::from_env());
+    let auto_review = Arc::new(AutoReviewConfig::from_env());
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -426,6 +487,26 @@ async fn main() {
         [],
     );
     let _ = conn.execute(
+        "ALTER TABLE friend_links ADD COLUMN application_id INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_links ADD COLUMN backlink_status TEXT NOT NULL DEFAULT 'pending'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_links ADD COLUMN backlink_deadline INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_links ADD COLUMN backlink_checked_at INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_links ADD COLUMN unreachable_since INTEGER",
+        [],
+    );
+    let _ = conn.execute(
         "INSERT INTO status_control (id, global_manual_offline, updated_at)
          VALUES (1, 0, ?1)
          ON CONFLICT(id) DO NOTHING",
@@ -435,7 +516,9 @@ async fn main() {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         token,
+        review_report_token,
         notifier,
+        auto_review,
     };
 
     let cors = CorsLayer::new()
@@ -482,6 +565,9 @@ async fn main() {
         .route("/links/delete", post(links_delete))
         .route("/links/settings", get(links_settings_get).post(links_settings_set))
         .route("/links/settings/test-smtp", post(links_settings_test_smtp))
+        .route("/links/review/report/tasks", get(links_review_report_tasks))
+        .route("/links/review/report/decision", post(links_review_report_decision))
+        .route("/links/review/report/removal", post(links_review_report_removal))
         .route("/links/admin", get(admin_pages::links_admin_page))
         .route("/visitor", get(visitor_stats))
         .route("/visitor/visit", post(visitor_visit))
@@ -1087,6 +1173,7 @@ async fn links_apply(
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_string());
     let now = now_ts();
+    let application_id: i64;
 
     {
         let conn = state.db.lock().unwrap();
@@ -1151,6 +1238,7 @@ async fn links_apply(
             )
                 .into_response();
         }
+        application_id = conn.last_insert_rowid();
     }
 
     let message = format!(
@@ -1176,7 +1264,7 @@ async fn links_apply(
     (
         StatusCode::CREATED,
         Json(ApiMessage {
-            message: "友链申请已提交，站长看到后会尽快处理".to_string(),
+            message: format!("友链申请已提交，编号 #{}，等待审核", application_id),
         }),
     )
         .into_response()
@@ -1228,24 +1316,187 @@ async fn links_review(
     if !authorized(&headers, &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let action = payload.action.trim().to_lowercase();
-    if action != "approve" && action != "reject" {
-        return (
+    match perform_review_decision(&state, payload, true).await {
+        Ok(message) => (StatusCode::OK, Json(ApiMessage { message })).into_response(),
+        Err(err) => (
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
-                message: "action 仅支持 approve/reject".to_string(),
+                message: err.to_string(),
             }),
         )
-            .into_response();
+            .into_response(),
+    }
+}
+
+async fn links_review_report_decision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ReviewDecisionReportPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.review_report_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let review_payload = LinkReviewPayload {
+        application_id: payload.application_id,
+        action: payload.action,
+        sort_order: payload.sort_order,
+        tags: payload.tags,
+        review_note: payload.review_note,
+    };
+    match perform_review_decision(&state, review_payload, payload.send_email.unwrap_or(true)).await {
+        Ok(message) => (StatusCode::OK, Json(ApiMessage { message })).into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn links_review_report_tasks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.review_report_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let conn = state.db.lock().unwrap();
+
+    let pending_applications = {
+        let mut stmt = match conn.prepare(
+            "SELECT id, site_name, site_url, avatar_url, description, email, note, created_at
+             FROM friend_link_applications
+             WHERE status = 'pending'
+             ORDER BY created_at ASC",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let rows = match stmt.query_map([], |row| {
+            Ok(PendingApplicationTask {
+                id: row.get(0)?,
+                site_name: row.get(1)?,
+                site_url: row.get(2)?,
+                avatar_url: row.get(3)?,
+                description: row.get(4)?,
+                email: row.get(5)?,
+                note: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        }) {
+            Ok(rows) => rows,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        rows.filter_map(Result::ok).collect::<Vec<_>>()
+    };
+
+    let active_links = {
+        let mut stmt = match conn.prepare(
+            "SELECT id, name, url, application_id, backlink_deadline, created_at
+             FROM friend_links
+             ORDER BY created_at ASC",
+        ) {
+            Ok(stmt) => stmt,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let rows = match stmt.query_map([], |row| {
+            Ok(ActiveLinkTask {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                url: row.get(2)?,
+                application_id: row.get(3)?,
+                backlink_deadline: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        }) {
+            Ok(rows) => rows,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        rows.filter_map(Result::ok).collect::<Vec<_>>()
+    };
+
+    (
+        StatusCode::OK,
+        Json(ReviewTasksResponse {
+            pending_applications,
+            active_links,
+            now_ts: now_ts(),
+            backlink_target: std::env::var("LINK_BACKLINK_TARGET")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "https://www.meowra.cn/".to_string()),
+            backlink_enforce_hours: state.auto_review.backlink_window_secs / 3600,
+            unreachable_enforce_hours: std::env::var("LINK_UNREACHABLE_ENFORCE_HOURS")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(72),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_review_report_removal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ReviewRemovalReportPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.review_report_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let now = now_ts();
+    let app_status = payload
+        .app_status
+        .unwrap_or_else(|| "removed_external_review".to_string());
+    let reason = payload
+        .reason
+        .unwrap_or_else(|| "由内网审查服务判定下架".to_string());
+    match remove_link_and_notify(
+        &state,
+        payload.link_id,
+        payload.application_id,
+        &app_status,
+        &reason,
+        now,
+        payload.send_email.unwrap_or(true),
+    )
+    .await
+    {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "已执行下架并同步状态".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: format!("下架失败: {}", err),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn perform_review_decision(
+    state: &AppState,
+    payload: LinkReviewPayload,
+    send_email: bool,
+) -> Result<String, String> {
+    let action = payload.action.trim().to_lowercase();
+    if action != "approve" && action != "reject" {
+        return Err("action 仅支持 approve/reject".to_string());
     }
 
     let now = now_ts();
     let review_note = normalize_optional(payload.review_note, 280);
     let (site_name, site_url, applicant_email) = {
-        let mut conn = state.db.lock().unwrap();
+        let mut conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
         let tx = match conn.transaction() {
             Ok(tx) => tx,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(_) => return Err("db transaction failed".to_string()),
         };
         let app_row = tx
             .query_row(
@@ -1265,32 +1516,33 @@ async fn links_review(
             .ok();
         let (site_name, site_url, avatar_url, description, applicant_email) = match app_row {
             Some(v) => v,
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(ApiMessage {
-                        message: "申请记录不存在".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
+            None => return Err("申请记录不存在".to_string()),
         };
 
         if action == "approve" {
             let link_id = format!("link-{}-{}", slugify_ascii(&site_name), payload.application_id);
             let tags = normalize_optional(payload.tags, 120);
             let sort_order = payload.sort_order.unwrap_or(now);
+            let backlink_window = state.auto_review.backlink_window_secs.max(3600);
             if tx
                 .execute(
-                    "INSERT INTO friend_links (id, name, url, avatar_url, description, tags, sort_order, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    "INSERT INTO friend_links (
+                        id, name, url, avatar_url, description, tags, sort_order, created_at,
+                        application_id, backlink_status, backlink_deadline, backlink_checked_at, unreachable_since
+                     )
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, NULL, NULL)
                      ON CONFLICT(id) DO UPDATE SET
                        name = excluded.name,
                        url = excluded.url,
                        avatar_url = excluded.avatar_url,
                        description = excluded.description,
                        tags = excluded.tags,
-                       sort_order = excluded.sort_order",
+                       sort_order = excluded.sort_order,
+                       application_id = excluded.application_id,
+                       backlink_status = excluded.backlink_status,
+                       backlink_deadline = excluded.backlink_deadline,
+                       backlink_checked_at = excluded.backlink_checked_at,
+                       unreachable_since = excluded.unreachable_since",
                     params![
                         link_id,
                         site_name,
@@ -1299,12 +1551,14 @@ async fn links_review(
                         description,
                         tags,
                         sort_order,
-                        now
+                        now,
+                        payload.application_id,
+                        now + backlink_window,
                     ],
                 )
                 .is_err()
             {
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                return Err("写入友链失败".to_string());
             }
         }
 
@@ -1317,18 +1571,22 @@ async fn links_review(
             )
             .is_err()
         {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return Err("更新申请状态失败".to_string());
         }
         if tx.commit().is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return Err("事务提交失败".to_string());
         }
         (site_name, site_url, applicant_email)
     };
 
     let applicant_email = normalize_optional(applicant_email, 128);
+    let mail_note: String;
     if let Some(email) = applicant_email {
+        if !send_email {
+            mail_note = "（邮件通知已跳过）".to_string();
+        } else {
         let notify_cfg = {
-            let conn = state.db.lock().unwrap();
+            let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
             state.notifier.runtime_config(&conn)
         };
         if let Err(err) = state
@@ -1344,20 +1602,20 @@ async fn links_review(
             .await
         {
             tracing::warn!("review result mail failed: {}", err);
+            mail_note = "（邮件通知失败）".to_string();
+        } else {
+            mail_note = "（邮件通知已发送）".to_string();
         }
+        }
+    } else {
+        mail_note = "（申请方未提供邮箱）".to_string();
     }
 
-    (
-        StatusCode::OK,
-        Json(ApiMessage {
-            message: if action == "approve" {
-                "已通过并加入友链列表".to_string()
-            } else {
-                "已拒绝该申请".to_string()
-            },
-        }),
-    )
-        .into_response()
+    Ok(if action == "approve" {
+        format!("已通过并加入友链列表{}", mail_note)
+    } else {
+        format!("已拒绝该申请{}", mail_note)
+    })
 }
 
 async fn links_sort(
@@ -1669,6 +1927,75 @@ async fn links_settings_test_smtp(
     }
 }
 
+
+async fn remove_link_and_notify(
+    state: &AppState,
+    link_id: String,
+    application_id: Option<i64>,
+    app_status: &str,
+    review_note: &str,
+    now: i64,
+    send_email: bool,
+) -> Result<(), String> {
+    let applicant = if let Some(app_id) = application_id {
+        let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+        conn.query_row(
+            "SELECT email, site_name, site_url FROM friend_link_applications WHERE id = ?1",
+            params![app_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .ok()
+    } else {
+        None
+    };
+
+    {
+        let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+        let _ = conn.execute("DELETE FROM friend_links WHERE id = ?1", params![link_id]);
+        if let Some(app_id) = application_id {
+            let _ = conn.execute(
+                "UPDATE friend_link_applications
+                 SET status = ?1, review_note = ?2, updated_at = ?3
+                 WHERE id = ?4",
+                params![app_status, review_note, now, app_id],
+            );
+        }
+    }
+
+    if send_email {
+        if let Some((email, app_name, app_url)) = applicant {
+        if let Some(email) = normalize_optional(email, 128) {
+            let notify_cfg = {
+                let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+                state.notifier.runtime_config(&conn)
+            };
+            if let Err(err) = state
+                .notifier
+                .notify_review_result_email(
+                    notify_cfg.smtp.as_ref(),
+                    &email,
+                    &app_name,
+                    &app_url,
+                    "reject",
+                    Some(review_note),
+                )
+                .await
+            {
+                tracing::warn!("link removal mail failed: {}", err);
+            }
+        }
+    }
+    }
+    Ok(())
+}
+
+
 async fn visitor_visit(
     State(state): State<AppState>,
     Json(payload): Json<VisitPayload>,
@@ -1744,8 +2071,8 @@ impl Notifier {
             let host = normalize_env("LINK_SMTP_HOST");
             let from = normalize_env("LINK_SMTP_FROM");
             let to = normalize_env("LINK_SMTP_TO");
-            match (host, from, to) {
-                (Some(host), Some(from), Some(to)) => {
+            match (host, from) {
+                (Some(host), Some(from)) => {
                     let port = std::env::var("LINK_SMTP_PORT")
                         .ok()
                         .and_then(|v| v.parse::<u16>().ok())
@@ -1756,24 +2083,16 @@ impl Notifier {
                         .ok()
                         .map(|v| v != "0" && v.to_lowercase() != "false")
                         .unwrap_or(true);
-                    let recipients = to
-                        .split(',')
-                        .map(|v| v.trim().to_string())
-                        .filter(|v| !v.is_empty())
-                        .collect::<Vec<_>>();
-                    if recipients.is_empty() {
-                        None
-                    } else {
-                        Some(SmtpConfig {
-                            host,
-                            port,
-                            username,
-                            password,
-                            from,
-                            to: recipients,
-                            use_starttls,
-                        })
-                    }
+                    let recipients = to.map(|v| split_recipients(&v)).unwrap_or_default();
+                    Some(SmtpConfig {
+                        host,
+                        port,
+                        username,
+                        password,
+                        from,
+                        to: recipients,
+                        use_starttls,
+                    })
                 }
                 _ => None,
             }
@@ -1812,22 +2131,21 @@ impl Notifier {
             .or_else(|| self.smtp.as_ref().map(|v| v.use_starttls))
             .unwrap_or(true);
 
-        let smtp = match (smtp_host, smtp_from, smtp_to) {
-            (Some(host), Some(from), Some(to_raw)) => {
-                let recipients = split_recipients(&to_raw);
-                if recipients.is_empty() {
-                    None
-                } else {
-                    Some(SmtpConfig {
-                        host,
-                        port: smtp_port.unwrap_or(587),
-                        username: smtp_user,
-                        password: smtp_pass,
-                        from,
-                        to: recipients,
-                        use_starttls: smtp_starttls,
-                    })
-                }
+        let smtp = match (smtp_host, smtp_from) {
+            (Some(host), Some(from)) => {
+                let recipients = smtp_to
+                    .as_deref()
+                    .map(split_recipients)
+                    .unwrap_or_default();
+                Some(SmtpConfig {
+                    host,
+                    port: smtp_port.unwrap_or(587),
+                    username: smtp_user,
+                    password: smtp_pass,
+                    from,
+                    to: recipients,
+                    use_starttls: smtp_starttls,
+                })
             }
             _ => None,
         };
@@ -2028,6 +2346,20 @@ impl Notifier {
             }
         }
         Err(format!("smtp send failed: {}", errors.join(" | ")))
+    }
+}
+
+impl AutoReviewConfig {
+    fn from_env() -> Self {
+        let backlink_window_secs = std::env::var("LINK_BACKLINK_ENFORCE_HOURS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .map(|hours| hours.max(1) * 3600)
+            .unwrap_or(24 * 3600);
+
+        Self {
+            backlink_window_secs,
+        }
     }
 }
 

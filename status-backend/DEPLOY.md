@@ -62,3 +62,62 @@ sudo systemctl enable --now status-backend
 ```bash
 sudo ufw allow 7999/tcp
 ```
+
+## 6) 内网审查服务（review-reporter）/ Internal Review Worker
+
+用于在内网环境执行网站审查，再将结果上报公网后端，避免公网后端主动抓取外站。
+
+### 6.1 构建发行版 / Build release binary
+
+```bash
+cd status-backend
+cargo build --release --bin review-reporter
+```
+
+发行版路径：
+- Linux: `./target/release/review-reporter`
+- Windows: `.\target\release\review-reporter.exe`
+
+### 6.2 运行（Linux）/ Run on Linux
+
+```bash
+cd /opt/status-backend
+REVIEW_API_BASE="https://your-public-api.example.com" \
+REVIEW_REPORT_TOKEN="your_report_token" \
+./target/release/review-reporter
+```
+
+### 6.3 systemd（Linux）/ systemd service
+
+创建 `/etc/systemd/system/review-reporter.service`：
+
+```
+[Unit]
+Description=Review Reporter (Internal Link Review Worker)
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/status-backend
+ExecStart=/opt/status-backend/target/release/review-reporter
+Restart=always
+RestartSec=5
+Environment=REVIEW_API_BASE=https://your-public-api.example.com
+Environment=REVIEW_REPORT_TOKEN=your_report_token
+Environment=REVIEW_LOOP_INTERVAL_SEC=300
+Environment=REVIEW_LOCAL_STATE=/opt/status-backend/review-worker-state.json
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启用：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now review-reporter
+```
+
+### 6.4 可选环境变量 / Optional env
+
+- `REVIEW_LOOP_INTERVAL_SEC` (default `300`)
+- `REVIEW_LOCAL_STATE` (default `review-worker-state.json`)

@@ -32,6 +32,8 @@ cargo run
 - `LINK_SMTP_FROM` (optional, e.g. `bot@example.com`)
 - `LINK_SMTP_TO` (optional, receiver list separated by comma)
 - `LINK_SMTP_STARTTLS` (optional, default `true`, set `0`/`false` to disable)
+- `LINK_REVIEW_REPORT_TOKEN` (optional, internal review reporter token; default same as `STATUS_TOKEN`)
+- `LINK_BACKLINK_ENFORCE_HOURS` (optional, default `24`, backlink grace window when approved)
 
 `.env` 示例 / Example:
 
@@ -65,9 +67,14 @@ STATUS_TOKEN=your_token
 - `GET /links/settings` (需要 token，读取 TG/SMTP 配置)
 - `POST /links/settings` (需要 token，保存 TG/SMTP 配置)
 - `POST /links/settings/test-smtp` (需要 token，发送 SMTP 测试邮件)
+- `POST /links/review/report/decision` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网上报审核结果)
+- `POST /links/review/report/removal` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网上报下架结果)
+- `GET /links/review/report/tasks` (需要 `LINK_REVIEW_REPORT_TOKEN`，内网拉取待审任务)
 - `GET /links/admin` (友链管理页面)
 
 说明：若申请记录包含 `email` 且 SMTP 已配置，`/links/review` 完成后会自动给申请者邮箱发送审核结果通知。
+审查拆分：公网后端不再主动抓取外站（避免暴露公网服务器 IP）。请将审查任务部署在内网服务，由内网服务调用 `.../review/report/...` 接口将审核/下架结果上报回公网后端。
+内网审查服务（`review-reporter`）的发行版部署与 systemd 常驻配置见 `status-backend/DEPLOY.md`。
 
 `/blog` 正文字段支持两种写法（兼容）：
 - `content_md`: Markdown 原文（推荐）
