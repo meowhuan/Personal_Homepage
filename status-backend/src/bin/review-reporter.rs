@@ -20,19 +20,15 @@ struct PendingApplicationTask {
     site_url: String,
     avatar_url: Option<String>,
     description: Option<String>,
-    email: Option<String>,
     note: Option<String>,
-    created_at: i64,
 }
 
 #[derive(Deserialize)]
 struct ActiveLinkTask {
     id: String,
-    name: String,
     url: String,
     application_id: Option<i64>,
     backlink_deadline: Option<i64>,
-    created_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Default)]

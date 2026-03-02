@@ -319,19 +319,15 @@ struct PendingApplicationTask {
     site_url: String,
     avatar_url: Option<String>,
     description: Option<String>,
-    email: Option<String>,
     note: Option<String>,
-    created_at: i64,
 }
 
 #[derive(Serialize)]
 struct ActiveLinkTask {
     id: String,
-    name: String,
     url: String,
     application_id: Option<i64>,
     backlink_deadline: Option<i64>,
-    created_at: i64,
 }
 
 #[derive(Clone)]
@@ -1366,7 +1362,7 @@ async fn links_review_report_tasks(
 
     let pending_applications = {
         let mut stmt = match conn.prepare(
-            "SELECT id, site_name, site_url, avatar_url, description, email, note, created_at
+            "SELECT id, site_name, site_url, avatar_url, description, note
              FROM friend_link_applications
              WHERE status = 'pending'
              ORDER BY created_at ASC",
@@ -1381,9 +1377,7 @@ async fn links_review_report_tasks(
                 site_url: row.get(2)?,
                 avatar_url: row.get(3)?,
                 description: row.get(4)?,
-                email: row.get(5)?,
-                note: row.get(6)?,
-                created_at: row.get(7)?,
+                note: row.get(5)?,
             })
         }) {
             Ok(rows) => rows,
@@ -1394,7 +1388,7 @@ async fn links_review_report_tasks(
 
     let active_links = {
         let mut stmt = match conn.prepare(
-            "SELECT id, name, url, application_id, backlink_deadline, created_at
+            "SELECT id, url, application_id, backlink_deadline
              FROM friend_links
              ORDER BY created_at ASC",
         ) {
@@ -1404,11 +1398,9 @@ async fn links_review_report_tasks(
         let rows = match stmt.query_map([], |row| {
             Ok(ActiveLinkTask {
                 id: row.get(0)?,
-                name: row.get(1)?,
-                url: row.get(2)?,
-                application_id: row.get(3)?,
-                backlink_deadline: row.get(4)?,
-                created_at: row.get(5)?,
+                url: row.get(1)?,
+                application_id: row.get(2)?,
+                backlink_deadline: row.get(3)?,
             })
         }) {
             Ok(rows) => rows,
