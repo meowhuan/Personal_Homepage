@@ -12,6 +12,7 @@ const links = ref([]);
 const submitLoading = ref(false);
 const submitError = ref("");
 const submitSuccess = ref("");
+const copyStatus = ref("");
 
 const form = reactive({
   site_name: "",
@@ -126,6 +127,40 @@ const splitTags = (tagValue) =>
     .filter(Boolean);
 
 const shownLinks = computed(() => links.value);
+const mySiteInfo = {
+  site_name: "Meowhuan的个人主页",
+  site_url: "https://www.meowra.cn/",
+  description: "一只处于互联网边缘的小猫的个人主页",
+  avatar_url: "https://www.meowra.cn/logo.png"
+};
+const mySiteOneClickText = [
+  mySiteInfo.site_name,
+  mySiteInfo.description,
+  mySiteInfo.site_url,
+  mySiteInfo.avatar_url
+].join("\n");
+
+const copyText = async (text) => {
+  copyStatus.value = "";
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const input = document.createElement("textarea");
+      input.value = text;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+    }
+    copyStatus.value = "已复制";
+    window.setTimeout(() => {
+      copyStatus.value = "";
+    }, 1400);
+  } catch {
+    copyStatus.value = "复制失败，请手动复制";
+  }
+};
 
 onMounted(() => {
   const savedTheme = localStorage.getItem("meow-theme");
@@ -244,79 +279,126 @@ onBeforeUnmount(() => {
           </article>
         </div>
 
-        <article
-          class="meow-card motion-card rounded-3xl p-5"
-          :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
-        >
-          <h2 class="font-display text-2xl">申请友链</h2>
-          <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-            请确保站点可访问，内容健康，且已添加本站后再提交申请。
-          </p>
-          <form class="mt-4 space-y-3" @submit.prevent="submitApply">
-            <input
-              v-model.trim="form.site_name"
-              type="text"
-              required
-              maxlength="64"
-              placeholder="站点名称 *"
-              class="meow-input"
-              :class="isNight ? 'meow-input-night' : ''"
-            />
-            <input
-              v-model.trim="form.site_url"
-              type="text"
-              required
-              maxlength="255"
-              placeholder="站点地址 * (https://...)"
-              class="meow-input"
-              :class="isNight ? 'meow-input-night' : ''"
-            />
-            <input
-              v-model.trim="form.avatar_url"
-              type="text"
-              maxlength="255"
-              placeholder="头像地址"
-              class="meow-input"
-              :class="isNight ? 'meow-input-night' : ''"
-            />
-            <input
-              v-model.trim="form.email"
-              type="email"
-              maxlength="128"
-              placeholder="联系邮箱"
-              class="meow-input"
-              :class="isNight ? 'meow-input-night' : ''"
-            />
-            <textarea
-              v-model.trim="form.description"
-              rows="3"
-              maxlength="280"
-              placeholder="站点简介"
-              class="meow-input resize-none"
-              :class="isNight ? 'meow-input-night' : ''"
-            ></textarea>
-            <textarea
-              v-model.trim="form.note"
-              rows="2"
-              maxlength="280"
-              placeholder="备注"
-              class="meow-input resize-none"
-              :class="isNight ? 'meow-input-night' : ''"
-            ></textarea>
-            <button
-              type="submit"
-              class="meow-btn-primary motion-press w-full"
-              :class="isNight ? 'bg-meow-night-accent text-meow-night-bg' : ''"
-              :disabled="submitLoading"
-            >
-              {{ submitLoading ? "提交中..." : "提交申请" }}
-            </button>
-          </form>
-          <p v-if="submitError" class="mt-3 text-xs text-[#e45883]">{{ submitError }}</p>
-          <p v-if="submitSuccess" class="mt-3 text-xs" :class="isNight ? 'text-meow-night-accent' : 'text-[#2f8f72]'">
-            {{ submitSuccess }}
-          </p>
-        </article>
+        <div class="space-y-4">
+          <article
+            class="meow-card motion-card rounded-3xl p-5"
+            :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
+          >
+            <h2 class="font-display text-2xl">申请友链</h2>
+            <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+              请确保站点可访问，内容健康，且已添加本站后再提交申请。
+            </p>
+            <form class="mt-4 space-y-3" @submit.prevent="submitApply">
+              <input
+                v-model.trim="form.site_name"
+                type="text"
+                required
+                maxlength="64"
+                placeholder="站点名称 *"
+                class="meow-input"
+                :class="isNight ? 'meow-input-night' : ''"
+              />
+              <input
+                v-model.trim="form.site_url"
+                type="text"
+                required
+                maxlength="255"
+                placeholder="站点地址 * (https://...)"
+                class="meow-input"
+                :class="isNight ? 'meow-input-night' : ''"
+              />
+              <input
+                v-model.trim="form.avatar_url"
+                type="text"
+                maxlength="255"
+                placeholder="头像地址"
+                class="meow-input"
+                :class="isNight ? 'meow-input-night' : ''"
+              />
+              <input
+                v-model.trim="form.email"
+                type="email"
+                maxlength="128"
+                placeholder="联系邮箱"
+                class="meow-input"
+                :class="isNight ? 'meow-input-night' : ''"
+              />
+              <textarea
+                v-model.trim="form.description"
+                rows="3"
+                maxlength="280"
+                placeholder="站点简介"
+                class="meow-input resize-none"
+                :class="isNight ? 'meow-input-night' : ''"
+              ></textarea>
+              <textarea
+                v-model.trim="form.note"
+                rows="2"
+                maxlength="280"
+                placeholder="备注"
+                class="meow-input resize-none"
+                :class="isNight ? 'meow-input-night' : ''"
+              ></textarea>
+              <button
+                type="submit"
+                class="meow-btn-primary motion-press w-full"
+                :class="isNight ? 'bg-meow-night-accent text-meow-night-bg' : ''"
+                :disabled="submitLoading"
+              >
+                {{ submitLoading ? "提交中..." : "提交申请" }}
+              </button>
+            </form>
+            <p v-if="submitError" class="mt-3 text-xs text-[#e45883]">{{ submitError }}</p>
+            <p v-if="submitSuccess" class="mt-3 text-xs" :class="isNight ? 'text-meow-night-accent' : 'text-[#2f8f72]'">
+              {{ submitSuccess }}
+            </p>
+          </article>
+
+          <article
+            class="meow-card motion-card rounded-3xl p-5"
+            :class="isNight ? 'bg-meow-night-card/85 border-meow-night-line' : ''"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="font-display text-2xl">本站信息</h2>
+              <button
+                type="button"
+                class="meow-pill motion-press"
+                :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-soft' : ''"
+                @click="copyText(mySiteOneClickText)"
+              >
+                一键复制
+              </button>
+            </div>
+            <p class="mt-2 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+              可以直接复制到你的友链配置中。
+            </p>
+            <div class="mt-3 space-y-2">
+              <div class="site-row">
+                <div class="site-key">站点名称</div>
+                <div class="site-value">{{ mySiteInfo.site_name }}</div>
+                <button type="button" class="site-copy" @click="copyText(mySiteInfo.site_name)">复制</button>
+              </div>
+              <div class="site-row">
+                <div class="site-key">站点简介</div>
+                <div class="site-value">{{ mySiteInfo.description }}</div>
+                <button type="button" class="site-copy" @click="copyText(mySiteInfo.description)">复制</button>
+              </div>
+              <div class="site-row">
+                <div class="site-key">站点地址</div>
+                <div class="site-value">{{ mySiteInfo.site_url }}</div>
+                <button type="button" class="site-copy" @click="copyText(mySiteInfo.site_url)">复制</button>
+              </div>
+              <div class="site-row">
+                <div class="site-key">头像地址</div>
+                <div class="site-value">{{ mySiteInfo.avatar_url }}</div>
+                <button type="button" class="site-copy" @click="copyText(mySiteInfo.avatar_url)">复制</button>
+              </div>
+            </div>
+            <p v-if="copyStatus" class="mt-2 text-xs" :class="isNight ? 'text-meow-night-accent' : 'text-[#2f8f72]'">
+              {{ copyStatus }}
+            </p>
+          </article>
+        </div>
       </section>
     </main>
   </div>
@@ -463,9 +545,59 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 3px rgba(136, 243, 255, 0.18);
 }
 
+.site-row {
+  display: grid;
+  grid-template-columns: 68px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(233, 217, 234, 0.95);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.meow-night .site-row {
+  border-color: rgba(74, 64, 110, 0.9);
+  background: rgba(26, 23, 45, 0.82);
+}
+
+.site-key {
+  font-size: 11px;
+  color: #7e6a86;
+}
+
+.meow-night .site-key {
+  color: #b8a6d8;
+}
+
+.site-value {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.site-copy {
+  border: 1px solid rgba(233, 217, 234, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #2b1d2a;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.meow-night .site-copy {
+  border-color: rgba(74, 64, 110, 0.9);
+  background: rgba(35, 28, 58, 0.88);
+  color: #f3e9ff;
+}
+
 @media (max-width: 640px) {
   .cord-switch {
     right: 100px;
+  }
+
+  .site-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>
