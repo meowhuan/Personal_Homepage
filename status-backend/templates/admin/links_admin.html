@@ -30,12 +30,46 @@
         padding: 12px;
         margin-top: 12px;
       }
+      .panel-links { display: flex; flex-direction: column; }
       .list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+      #link-list {
+        max-height: min(62vh, 780px);
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+      #link-list::-webkit-scrollbar { width: 6px; }
+      #link-list::-webkit-scrollbar-thumb { background: rgba(234, 171, 216, 0.45); border-radius: 999px; }
       .item {
         border-radius: 14px;
         border: 1px solid rgba(234, 219, 234, 0.9);
         background: rgba(255, 255, 255, 0.78);
         padding: 10px;
+      }
+      .status-box {
+        margin-top: 10px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.85);
+        border: 1px dashed rgba(234, 219, 234, 0.9);
+        color: #5b4c5a;
+        font-size: 12px;
+      }
+      .log-list {
+        margin-top: 8px;
+        max-height: 180px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .log-item {
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(234, 219, 234, 0.65);
+        font-size: 12px;
+        color: #6d5f6b;
+        padding: 6px 8px;
+        line-height: 1.45;
       }
       .item.collapsed .item-body { display: none; }
       .item-head {
@@ -54,6 +88,7 @@
       .toggle { min-width: 72px; }
       @media (max-width: 860px) {
         .grid-2 { grid-template-columns: 1fr; }
+        #link-list { max-height: none; overflow: visible; padding-right: 0; }
       }
     </style>
   </head>
@@ -84,8 +119,13 @@
               </div>
               <div class="small">仅显示 `pending`，审核通过/拒绝后会自动从此处消失。</div>
               <div id="app-list" class="list"></div>
+              <div style="margin-top:10px;">
+                <strong>操作状态与日志</strong>
+                <div id="status" class="status-box">等待操作</div>
+                <div id="log-list" class="log-list"></div>
+              </div>
             </div>
-            <div class="panel">
+            <div class="panel panel-links">
               <div class="row-inline">
                 <strong>已收录友链</strong>
                 <button id="save-sort" class="ghost">保存排序</button>
@@ -152,12 +192,12 @@
             </div>
           </div>
 
-          <div class="status" id="status"></div>
         </div>
       </div>
     </div>
     <script>
       const statusEl = document.getElementById("status");
+      const logListEl = document.getElementById("log-list");
       const tokenEl = document.getElementById("token");
       const baseEl = document.getElementById("base");
       const appListEl = document.getElementById("app-list");
@@ -169,7 +209,19 @@
         const target = api(path);
         return `${target}${target.includes("?") ? "&" : "?"}_ts=${Date.now()}`;
       };
-      const setStatus = (text) => { statusEl.textContent = text; };
+      const setStatus = (text) => {
+        const message = String(text || "").trim() || "无状态信息";
+        statusEl.textContent = message;
+        const now = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+        const row = document.createElement("div");
+        row.className = "log-item";
+        row.textContent = `[${now}] ${message}`;
+        logListEl.prepend(row);
+        const logs = Array.from(logListEl.children);
+        if (logs.length > 80) {
+          logs.slice(80).forEach((el) => el.remove());
+        }
+      };
       const esc = (value = "") => String(value)
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
@@ -277,6 +329,11 @@
           return;
         }
         items.forEach((item) => {
+          const stageActive = Boolean(item.backlink_deadline)
+            && (!item.backlink_status || item.backlink_status === "pending");
+          const stageText = stageActive
+            ? `进行中（截止 ${ts(item.backlink_deadline)}）`
+            : `未启用/已结束${item.backlink_status ? `（${esc(item.backlink_status)}）` : ""}`;
           const wrap = document.createElement("div");
           wrap.className = "item collapsed";
           wrap.dataset.id = item.id;
@@ -306,12 +363,12 @@
                 <div><input data-tags placeholder="标签（逗号分隔）" value="${esc(item.tags || "")}" /></div>
               </div>
               <div class="small" data-review-stage>
-                24h回链审查：${item.backlink_deadline ? `进行中（截止 ${ts(item.backlink_deadline)}）` : `未启用/已结束${item.backlink_status ? `（${esc(item.backlink_status)}）` : ""}`}
+                24h回链审查：${stageText}
               </div>
               <div><textarea data-description placeholder="简介">${esc(item.description || "")}</textarea></div>
               <div class="toolbar" style="margin-bottom:0;">
                 <button class="ok" data-save-item>保存编辑</button>
-                <button class="ghost" data-cancel-stage ${item.backlink_deadline ? "" : "disabled"}>取消24h审查</button>
+                <button class="ghost" data-cancel-stage style="${stageActive ? "" : "display:none;"}">取消24h审查</button>
                 <button class="danger" data-delete-item>删除友链</button>
               </div>
             </div>
@@ -358,7 +415,7 @@
             }
           });
           wrap.querySelector("[data-cancel-stage]").addEventListener("click", async () => {
-            if (!item.backlink_deadline) {
+            if (!stageActive) {
               setStatus("该站点当前不在24h回链审查阶段");
               return;
             }
