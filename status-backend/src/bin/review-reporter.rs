@@ -79,21 +79,37 @@ async fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("review-worker-state.json"));
     let worker_config = WorkerConfig::from_env();
+    let run_once = std::env::args().any(|arg| arg == "--once")
+        || std::env::var("REVIEW_RUN_ONCE")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .expect("build client");
+    eprintln!(
+        "[review-worker] started: api_base={} interval_sec={} seo_provider={} run_once={}",
+        base,
+        interval_secs,
+        worker_config.provider_label(),
+        run_once
+    );
 
     loop {
-        if let Err(err) = run_once(&client, &base, &token, &state_file, &worker_config).await {
+        if let Err(err) = run_once_cycle(&client, &base, &token, &state_file, &worker_config).await {
             eprintln!("[review-worker] run_once error: {}", err);
+        }
+        if run_once {
+            eprintln!("[review-worker] run_once finished, exiting.");
+            break;
         }
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
     }
 }
 
-async fn run_once(
+async fn run_once_cycle(
     client: &reqwest::Client,
     base: &str,
     token: &str,
@@ -113,6 +129,10 @@ async fn run_once(
 
     for app in &tasks.pending_applications {
         let decision = evaluate_application(client, app, &tasks.backlink_target, worker_config).await;
+        eprintln!(
+            "[review-worker] app#{} {} => action={} note={}",
+            app.id, app.site_url, decision.action, decision.review_note
+        );
         if decision.action == "pending" {
             continue;
         }
@@ -124,12 +144,25 @@ async fn run_once(
             "review_note": decision.review_note,
             "send_email": true
         });
-        let _ = client
+        match client
             .post(format!("{}/links/review/report/decision", base.trim_end_matches('/')))
             .header("x-token", token)
             .json(&payload)
             .send()
-            .await;
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!(
+                    "[review-worker] report decision app#{} status={} body={}",
+                    app.id, status, body
+                );
+            }
+            Err(err) => {
+                eprintln!("[review-worker] report decision app#{} failed: {}", app.id, err);
+            }
+        }
     }
 
     let now = tasks.now_ts;
@@ -181,6 +214,12 @@ async fn run_once(
         }
     }
 
+    eprintln!(
+        "[review-worker] loop done: pending_apps={} active_links={} unreachable_state={}",
+        tasks.pending_applications.len(),
+        tasks.active_links.len(),
+        state.unreachable_since.len()
+    );
     save_state(state_file, &state);
     Ok(())
 }
@@ -440,12 +479,25 @@ async fn report_removal(
         "reason": reason,
         "send_email": true
     });
-    let _ = client
+    match client
         .post(format!("{}/links/review/report/removal", base.trim_end_matches('/')))
         .header("x-token", token)
         .json(&payload)
         .send()
-        .await;
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            eprintln!(
+                "[review-worker] report removal link={} status={} body={}",
+                link_id, status, body
+            );
+        }
+        Err(err) => {
+            eprintln!("[review-worker] report removal link={} failed: {}", link_id, err);
+        }
+    }
 }
 
 async fn fetch_site(client: &reqwest::Client, site_url: &str) -> Option<(bool, String)> {
@@ -594,5 +646,13 @@ impl WorkerConfig {
             _ => None,
         };
         Self { seo_provider }
+    }
+
+    fn provider_label(&self) -> &'static str {
+        match self.seo_provider {
+            Some(SeoProviderConfig::Generic(_)) => "generic",
+            Some(SeoProviderConfig::SerpApi(_)) => "serpapi",
+            None => "none",
+        }
     }
 }

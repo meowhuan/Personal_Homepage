@@ -121,6 +121,7 @@ sudo systemctl enable --now review-reporter
 
 - `REVIEW_LOOP_INTERVAL_SEC` (default `300`)
 - `REVIEW_LOCAL_STATE` (default `review-worker-state.json`)
+- `REVIEW_RUN_ONCE` (optional, `1/true` to run single cycle then exit, useful for debugging)
 - `REVIEW_SEO_PROVIDER` (optional: `none`/`generic`/`serpapi`, default `none`)
 - `REVIEW_SEO_MAX_BONUS` (optional, default `12`, range `1~30`)
 
@@ -144,4 +145,13 @@ sudo systemctl enable --now review-reporter
   "score": 78,
   "reason": "index coverage and keyword profile look good"
 }
+```
+
+单次排障运行示例：
+
+```bash
+REVIEW_API_BASE="https://your-public-api.example.com" \
+REVIEW_REPORT_TOKEN="your_report_token" \
+REVIEW_RUN_ONCE=1 \
+./target/release/review-reporter
 ```

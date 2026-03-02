@@ -75,6 +75,7 @@ STATUS_TOKEN=your_token
 说明：若申请记录包含 `email` 且 SMTP 已配置，`/links/review` 完成后会自动给申请者邮箱发送审核结果通知。
 审查拆分：公网后端不再主动抓取外站（避免暴露公网服务器 IP）。请将审查任务部署在内网服务，由内网服务调用 `.../review/report/...` 接口将审核/下架结果上报回公网后端。
 内网审查服务（`review-reporter`）的发行版部署与 systemd 常驻配置见 `status-backend/DEPLOY.md`。
+排障可使用单次模式：`review-reporter --once` 或设置 `REVIEW_RUN_ONCE=1`。
 
 ## 审核规则（当前实现）
 
