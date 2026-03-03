@@ -121,6 +121,7 @@ const {
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#about">关于我</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#schedule">行程表</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#projects">项目</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/blog.html">博客</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/friends.html">友链</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
@@ -412,6 +413,45 @@ const {
               style="--float-delay: 0.1s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
+              <h3 class="text-base font-600">技能积累</h3>
+              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                随缘学习新技能，但是不知道学什么好，感觉什么都想学又什么都学不好。
+              </p>
+              <span class="meow-pill motion-press mt-4">学习中</span>
+            </article>
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.35s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
+              <h3 class="text-base font-600">小记录</h3>
+              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                偶尔记录一些日常小事，想记录但又不想记录，感觉有点矛盾 ( •̥́ ˍ •̀ू )。
+              </p>
+              <span class="meow-pill motion-press mt-4">随缘更新</span>
+            </article>
+          </div>
+        </section>
+
+        <section id="projects" class="mt-16">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 class="font-display text-2xl">GitHub 项目</h2>
+            <a
+              class="meow-pill motion-press"
+              :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
+              href="https://github.com/meowhuan"
+              target="_blank"
+              rel="noreferrer"
+            >
+              查看更多
+            </a>
+          </div>
+          <div class="mt-6 grid gap-4 md:grid-cols-3">
+            <article
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.1s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">Oyama's HRT Tracker</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 为记录与跟踪 HRT 过程的前端小工具编写的后端程序，基本完善，不定期维护。
@@ -430,22 +470,36 @@ const {
               style="--float-delay: 0.35s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
-              <h3 class="text-base font-600">技能积累</h3>
+              <h3 class="text-base font-600">Android Cam Bridge</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                随缘学习新技能，但是不知道学什么好，感觉什么都想学又什么都学不好。
+                让 Android 设备变成电脑可用摄像头的桥接工具，主要用于本地调试和跨设备视频输入场景，持续维护中。
               </p>
-              <span class="meow-pill motion-press mt-4">学习中</span>
+              <a
+                class="meow-pill motion-press mt-4 inline-flex"
+                href="https://github.com/meowhuan/Android-Cam-Bridge"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看项目
+              </a>
             </article>
             <article
               class="meow-card motion-card p-5"
               style="--float-delay: 0.6s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
-              <h3 class="text-base font-600">小记录</h3>
+              <h3 class="text-base font-600">Personal Homepage</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                偶尔记录一些日常小事，想记录但又不想记录，感觉有点矛盾 ( •̥́ ˍ •̀ू )。
+                当前个人主页项目本体，包含首页、博客、友链以及在线状态相关功能，持续迭代中。
               </p>
-              <span class="meow-pill motion-press mt-4">随缘更新</span>
+              <a
+                class="meow-pill motion-press mt-4 inline-flex"
+                href="https://github.com/meowhuan/Personal_Homepage"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看项目
+              </a>
             </article>
           </div>
         </section>
