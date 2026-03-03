@@ -2772,74 +2772,33 @@ fn extract_auto_link_tags(
 ) -> Option<String> {
     let mut seen = HashSet::new();
     let mut tags = Vec::new();
+    let corpus = format!(
+        "{}\n{}\n{}\n{}",
+        site_name,
+        description.unwrap_or(""),
+        review_note.unwrap_or(""),
+        site_url
+    )
+    .to_lowercase();
 
-    if let Ok(url) = Url::parse(site_url) {
-        if let Some(host) = url.host_str() {
-            let host = host.trim().to_lowercase();
-            let host_no_www = host.strip_prefix("www.").unwrap_or(&host).to_string();
-            push_tag(&mut tags, &mut seen, host_no_www);
-            let parts: Vec<&str> = host.split('.').collect();
-            if parts.len() >= 2 {
-                let root = parts[parts.len() - 2].to_string();
-                push_tag(&mut tags, &mut seen, root);
-            }
+    let tag_rules: [(&str, &[&str]); 5] = [
+        ("个人小站", &["个人小站", "个人站", "独立站", "小站", "personal site"]),
+        (
+            "个人主页",
+            &["个人主页", "个人首页", "主页", "homepage", "about me"],
+        ),
+        ("博客", &["博客", "blog", "日志", "随笔"]),
+        ("导航站", &["导航站", "导航", "nav", "directory"]),
+        ("音乐站", &["音乐站", "音乐", "music", "歌单"]),
+    ];
+
+    for (tag, keywords) in tag_rules {
+        if contains_any_keyword(&corpus, keywords) {
+            push_tag(&mut tags, &mut seen, tag.to_string());
         }
-    }
-
-    collect_keywords(site_name, &mut tags, &mut seen);
-    if let Some(text) = description {
-        collect_keywords(text, &mut tags, &mut seen);
-    }
-    if let Some(text) = review_note {
-        collect_keywords(text, &mut tags, &mut seen);
     }
 
     join_tags_with_limit(tags, 120)
-}
-
-fn collect_keywords(text: &str, tags: &mut Vec<String>, seen: &mut HashSet<String>) {
-    let mut ascii_buf = String::new();
-    let mut cjk_buf = String::new();
-    let flush_ascii = |buf: &mut String, tags: &mut Vec<String>, seen: &mut HashSet<String>| {
-        if buf.is_empty() {
-            return;
-        }
-        let token = buf.to_lowercase();
-        buf.clear();
-        if token.len() < 2 || token.len() > 24 || is_ascii_stopword(&token) {
-            return;
-        }
-        push_tag(tags, seen, token);
-    };
-    let flush_cjk = |buf: &mut String, tags: &mut Vec<String>, seen: &mut HashSet<String>| {
-        if buf.is_empty() {
-            return;
-        }
-        let token = buf.clone();
-        buf.clear();
-        let len = token.chars().count();
-        if !(2..=8).contains(&len) || is_cjk_stopword(&token) {
-            return;
-        }
-        push_tag(tags, seen, token);
-    };
-
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' {
-            ascii_buf.push(ch);
-            flush_cjk(&mut cjk_buf, tags, seen);
-            continue;
-        }
-        if is_cjk_char(ch) {
-            cjk_buf.push(ch);
-            flush_ascii(&mut ascii_buf, tags, seen);
-            continue;
-        }
-        flush_ascii(&mut ascii_buf, tags, seen);
-        flush_cjk(&mut cjk_buf, tags, seen);
-    }
-    flush_ascii(&mut ascii_buf, tags, seen);
-    flush_cjk(&mut cjk_buf, tags, seen);
 }
 
 fn split_tag_tokens(raw: &str) -> Vec<String> {
@@ -2883,47 +2842,8 @@ fn push_tag(tags: &mut Vec<String>, seen: &mut HashSet<String>, tag: String) {
     }
 }
 
-fn is_cjk_char(ch: char) -> bool {
-    ('\u{4E00}'..='\u{9FFF}').contains(&ch)
-}
-
-fn is_ascii_stopword(token: &str) -> bool {
-    matches!(
-        token,
-        "http"
-            | "https"
-            | "www"
-            | "com"
-            | "cn"
-            | "net"
-            | "org"
-            | "the"
-            | "and"
-            | "for"
-            | "with"
-            | "from"
-            | "blog"
-            | "site"
-            | "home"
-    )
-}
-
-fn is_cjk_stopword(token: &str) -> bool {
-    matches!(
-        token,
-        "网站"
-            | "站点"
-            | "首页"
-            | "友链"
-            | "通过"
-            | "审核"
-            | "申请"
-            | "系统"
-            | "自动"
-            | "人工"
-            | "检测"
-            | "链接"
-    )
+fn contains_any_keyword(text: &str, keywords: &[&str]) -> bool {
+    keywords.iter().any(|k| text.contains(&k.to_lowercase()))
 }
 
 fn slugify_ascii(value: &str) -> String {
