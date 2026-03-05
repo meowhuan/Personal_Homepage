@@ -491,7 +491,10 @@ async fn main() {
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_title TEXT", []);
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_artist TEXT", []);
     let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_source TEXT", []);
-    let _ = conn.execute("ALTER TABLE device_status ADD COLUMN music_updated_at INTEGER", []);
+    let _ = conn.execute(
+        "ALTER TABLE device_status ADD COLUMN music_updated_at INTEGER",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE blog_posts ADD COLUMN content_md TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE friend_link_applications ADD COLUMN review_note TEXT",
@@ -578,13 +581,28 @@ async fn main() {
         .route("/links/sort", post(links_sort))
         .route("/links/update", post(links_update))
         .route("/links/delete", post(links_delete))
-        .route("/links/review/stage/cancel", post(links_review_stage_cancel))
-        .route("/links/settings", get(links_settings_get).post(links_settings_set))
+        .route(
+            "/links/review/stage/cancel",
+            post(links_review_stage_cancel),
+        )
+        .route(
+            "/links/settings",
+            get(links_settings_get).post(links_settings_set),
+        )
         .route("/links/settings/test-smtp", post(links_settings_test_smtp))
         .route("/links/review/report/tasks", get(links_review_report_tasks))
-        .route("/links/review/report/decision", post(links_review_report_decision))
-        .route("/links/review/report/manual", post(links_review_report_manual))
-        .route("/links/review/report/removal", post(links_review_report_removal))
+        .route(
+            "/links/review/report/decision",
+            post(links_review_report_decision),
+        )
+        .route(
+            "/links/review/report/manual",
+            post(links_review_report_manual),
+        )
+        .route(
+            "/links/review/report/removal",
+            post(links_review_report_removal),
+        )
         .route("/links/admin", get(admin_pages::links_admin_page))
         .route("/visitor", get(visitor_stats))
         .route("/visitor/visit", post(visitor_visit))
@@ -1059,9 +1077,7 @@ async fn blog_update(
         }
         let sort_order = item.sort_order.unwrap_or(idx as i64);
         let input_content = item.content.unwrap_or_default();
-        let content_md = item
-            .content_md
-            .unwrap_or_else(|| input_content.join("\n"));
+        let content_md = item.content_md.unwrap_or_else(|| input_content.join("\n"));
         let content: Vec<String> = if !input_content.is_empty() {
             input_content
         } else {
@@ -1149,11 +1165,11 @@ async fn links_apply(
     Json(payload): Json<LinkApplyPayload>,
 ) -> impl IntoResponse {
     let site_name = payload.site_name.trim();
-    if site_name.is_empty() || site_name.chars().count() > 64 {
+    if site_name.is_empty() || site_name.chars().count() > 32 {
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
-                message: "站点名称长度需在 1-64 字符内".to_string(),
+                message: "站点名称长度需在 1-32 字符内".to_string(),
             }),
         )
             .into_response();
@@ -1186,6 +1202,15 @@ async fn links_apply(
 
     let description = normalize_optional(payload.description, 280);
     let email = normalize_optional(payload.email, 128);
+    if email.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "请填写联系邮箱".to_string(),
+            }),
+        )
+            .into_response();
+    }
     let note = normalize_optional(payload.note, 280);
     let ip = client_ip(&headers);
     let user_agent = headers
@@ -1270,7 +1295,10 @@ async fn links_apply(
         .into_response()
 }
 
-async fn links_applications(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+async fn links_applications(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     if !authorized(&headers, &state.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -1305,7 +1333,11 @@ async fn links_applications(State(state): State<AppState>, headers: HeaderMap) -
         Err(_) => return (StatusCode::OK, Json(Vec::<LinkApplication>::new())).into_response(),
     };
 
-    (StatusCode::OK, Json(rows.filter_map(Result::ok).collect::<Vec<_>>())).into_response()
+    (
+        StatusCode::OK,
+        Json(rows.filter_map(Result::ok).collect::<Vec<_>>()),
+    )
+        .into_response()
 }
 
 async fn links_review(
@@ -1390,7 +1422,7 @@ async fn links_review_report_manual(
         )
         .ok()
     };
-    let (site_name, site_url, _email, status, manual_notified) = match app_row {
+    let (site_name, site_url, email, status, manual_notified) = match app_row {
         Some(v) => v,
         None => {
             return (
@@ -1430,9 +1462,10 @@ async fn links_review_report_manual(
         };
         let subject = "New friend-link application (manual review required)".to_string();
         let msg = format!(
-            "New friend-link application (manual review required)\nsite: {}\nurl: {}\nreview_note: {}",
+            "New friend-link application (manual review required)\nsite: {}\nurl: {}\nemail: {}\nreview_note: {}",
             site_name,
             site_url,
+            email.as_deref().unwrap_or("-"),
             review_note.as_deref().unwrap_or("-")
         );
         let send_result = if let Some(smtp_cfg) = notify_cfg.smtp.as_ref() {
@@ -1633,9 +1666,9 @@ async fn perform_review_decision(
             .ok();
         let (site_name, site_url, avatar_url, description, applicant_email, existing_review_note) =
             match app_row {
-            Some(v) => v,
-            None => return Err("申请记录不存在".to_string()),
-        };
+                Some(v) => v,
+                None => return Err("申请记录不存在".to_string()),
+            };
         let existing_review_note = normalize_optional(existing_review_note, 560);
         let final_review_note = match (existing_review_note, incoming_review_note.clone()) {
             (Some(existing), Some(incoming)) => {
@@ -1651,7 +1684,11 @@ async fn perform_review_decision(
         };
 
         if action == "approve" {
-            let link_id = format!("link-{}-{}", slugify_ascii(&site_name), payload.application_id);
+            let link_id = format!(
+                "link-{}-{}",
+                slugify_ascii(&site_name),
+                payload.application_id
+            );
             let manual_tags = normalize_optional(payload.tags, 120);
             let tags = if send_admin_smtp_notify {
                 merge_link_tags(
@@ -1712,7 +1749,12 @@ async fn perform_review_decision(
                 "UPDATE friend_link_applications
                  SET status = ?1, review_note = ?2, updated_at = ?3
                  WHERE id = ?4",
-                params![action, final_review_note.clone(), now, payload.application_id],
+                params![
+                    action,
+                    final_review_note.clone(),
+                    now,
+                    payload.application_id
+                ],
             )
             .is_err()
         {
@@ -1726,32 +1768,32 @@ async fn perform_review_decision(
 
     let applicant_email = normalize_optional(applicant_email, 128);
     let mail_note: String;
-    if let Some(email) = applicant_email {
+    if let Some(email) = applicant_email.as_deref() {
         if !send_email {
             mail_note = "（邮件通知已跳过）".to_string();
         } else {
-        let notify_cfg = {
-            let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
-            state.notifier.runtime_config(&conn)
-        };
-        if let Err(err) = state
-            .notifier
-            .notify_review_result_email(
-                notify_cfg.smtp.as_ref(),
-                &email,
-                &site_name,
-                &site_url,
-                &action,
-                final_review_note.as_deref(),
-                !send_admin_smtp_notify && manual_note_provided,
-            )
-            .await
-        {
-            tracing::warn!("review result mail failed: {}", err);
-            mail_note = "（邮件通知失败）".to_string();
-        } else {
-            mail_note = "（邮件通知已发送）".to_string();
-        }
+            let notify_cfg = {
+                let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+                state.notifier.runtime_config(&conn)
+            };
+            if let Err(err) = state
+                .notifier
+                .notify_review_result_email(
+                    notify_cfg.smtp.as_ref(),
+                    email,
+                    &site_name,
+                    &site_url,
+                    &action,
+                    final_review_note.as_deref(),
+                    !send_admin_smtp_notify && manual_note_provided,
+                )
+                .await
+            {
+                tracing::warn!("review result mail failed: {}", err);
+                mail_note = "（邮件通知失败）".to_string();
+            } else {
+                mail_note = "（邮件通知已发送）".to_string();
+            }
         }
     } else {
         mail_note = "（申请方未提供邮箱）".to_string();
@@ -1766,15 +1808,20 @@ async fn perform_review_decision(
             if !smtp_cfg.to.is_empty() {
                 let subject = format!(
                     "Auto review result: {} ({})",
-                    if action == "approve" { "APPROVE" } else { "REJECT" },
+                    if action == "approve" {
+                        "APPROVE"
+                    } else {
+                        "REJECT"
+                    },
                     site_name
                 );
                 let body = format!(
-                    "Auto review result\napplication_id: {}\naction: {}\nsite: {}\nurl: {}\nreview_note: {}",
+                    "Auto review result\napplication_id: {}\naction: {}\nsite: {}\nurl: {}\nemail: {}\nreview_note: {}",
                     payload.application_id,
                     action,
                     site_name,
                     site_url,
+                    applicant_email.as_deref().unwrap_or("-"),
                     final_review_note.as_deref().unwrap_or("-")
                 );
                 let html = build_auto_review_admin_html(
@@ -1782,6 +1829,7 @@ async fn perform_review_decision(
                     &action,
                     &site_name,
                     &site_url,
+                    applicant_email.as_deref(),
                     final_review_note.as_deref().unwrap_or("-"),
                 );
                 if let Err(err) = state
@@ -1857,11 +1905,11 @@ async fn links_update(
             .into_response();
     }
     let name = payload.name.trim();
-    if name.is_empty() || name.chars().count() > 64 {
+    if name.is_empty() || name.chars().count() > 32 {
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
-                message: "名称长度需在 1-64 字符内".to_string(),
+                message: "名称长度需在 1-32 字符内".to_string(),
             }),
         )
             .into_response();
@@ -2035,36 +2083,47 @@ async fn links_settings_set(
     let updates = [
         (
             "tg_bot_token",
-            payload.tg_bot_token.map(|v| v.trim().chars().take(256).collect::<String>()),
+            payload
+                .tg_bot_token
+                .map(|v| v.trim().chars().take(256).collect::<String>()),
         ),
         (
             "tg_chat_id",
-            payload.tg_chat_id.map(|v| v.trim().chars().take(128).collect::<String>()),
+            payload
+                .tg_chat_id
+                .map(|v| v.trim().chars().take(128).collect::<String>()),
         ),
         (
             "smtp_host",
-            payload.smtp_host.map(|v| v.trim().chars().take(255).collect::<String>()),
+            payload
+                .smtp_host
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
         ),
-        (
-            "smtp_port",
-            payload.smtp_port.map(|v| v.to_string()),
-        ),
+        ("smtp_port", payload.smtp_port.map(|v| v.to_string())),
         (
             "smtp_user",
-            payload.smtp_user.map(|v| v.trim().chars().take(255).collect::<String>()),
+            payload
+                .smtp_user
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
         ),
         ("smtp_pass", payload.smtp_pass.map(|v| v.trim().to_string())),
         (
             "smtp_from",
-            payload.smtp_from.map(|v| v.trim().chars().take(255).collect::<String>()),
+            payload
+                .smtp_from
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
         ),
         (
             "smtp_to",
-            payload.smtp_to.map(|v| v.trim().chars().take(512).collect::<String>()),
+            payload
+                .smtp_to
+                .map(|v| v.trim().chars().take(512).collect::<String>()),
         ),
         (
             "smtp_starttls",
-            payload.smtp_starttls.map(|v| if v { "1".to_string() } else { "0".to_string() }),
+            payload
+                .smtp_starttls
+                .map(|v| if v { "1".to_string() } else { "0".to_string() }),
         ),
     ];
     for (key, value) in updates {
@@ -2132,12 +2191,7 @@ async fn links_settings_test_smtp(
     let override_to = recipient.map(|v| vec![v.clone()]);
     let send_result = state
         .notifier
-        .send_smtp(
-            notify_cfg.smtp.as_ref(),
-            subject,
-            &body,
-            override_to,
-        )
+        .send_smtp(notify_cfg.smtp.as_ref(), subject, &body, override_to)
         .await;
     match send_result {
         Ok(()) => (
@@ -2156,7 +2210,6 @@ async fn links_settings_test_smtp(
             .into_response(),
     }
 }
-
 
 async fn remove_link_and_notify(
     state: &AppState,
@@ -2200,16 +2253,16 @@ async fn remove_link_and_notify(
 
     if send_email {
         if let Some((email, app_name, app_url)) = applicant {
-        if let Some(email) = normalize_optional(email, 128) {
-            let notify_cfg = {
-                let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
-                state.notifier.runtime_config(&conn)
-            };
-            if let Err(err) = state
-                .notifier
-                .notify_review_result_email(
-                    notify_cfg.smtp.as_ref(),
-                    &email,
+            if let Some(email) = normalize_optional(email, 128) {
+                let notify_cfg = {
+                    let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+                    state.notifier.runtime_config(&conn)
+                };
+                if let Err(err) = state
+                    .notifier
+                    .notify_review_result_email(
+                        notify_cfg.smtp.as_ref(),
+                        &email,
                         &app_name,
                         &app_url,
                         "reject",
@@ -2219,13 +2272,12 @@ async fn remove_link_and_notify(
                     .await
                 {
                     tracing::warn!("link removal mail failed: {}", err);
+                }
             }
         }
     }
-    }
     Ok(())
 }
-
 
 async fn visitor_visit(
     State(state): State<AppState>,
@@ -2340,15 +2392,12 @@ impl Notifier {
         let tg_bot_token = read_setting(conn, "tg_bot_token").or_else(|| self.tg_bot_token.clone());
         let tg_chat_id = read_setting(conn, "tg_chat_id").or_else(|| self.tg_chat_id.clone());
 
-        let smtp_host = read_setting(conn, "smtp_host")
-            .or_else(|| self.smtp.as_ref().map(|v| v.host.clone()));
-        let smtp_from = read_setting(conn, "smtp_from")
-            .or_else(|| self.smtp.as_ref().map(|v| v.from.clone()));
-        let smtp_to = read_setting(conn, "smtp_to").or_else(|| {
-            self.smtp
-                .as_ref()
-                .map(|v| v.to.join(","))
-        });
+        let smtp_host =
+            read_setting(conn, "smtp_host").or_else(|| self.smtp.as_ref().map(|v| v.host.clone()));
+        let smtp_from =
+            read_setting(conn, "smtp_from").or_else(|| self.smtp.as_ref().map(|v| v.from.clone()));
+        let smtp_to =
+            read_setting(conn, "smtp_to").or_else(|| self.smtp.as_ref().map(|v| v.to.join(",")));
         let smtp_port = read_setting(conn, "smtp_port")
             .and_then(|v| v.parse::<u16>().ok())
             .or_else(|| self.smtp.as_ref().map(|v| v.port));
@@ -2363,10 +2412,7 @@ impl Notifier {
 
         let smtp = match (smtp_host, smtp_from) {
             (Some(host), Some(from)) => {
-                let recipients = smtp_to
-                    .as_deref()
-                    .map(split_recipients)
-                    .unwrap_or_default();
+                let recipients = smtp_to.as_deref().map(split_recipients).unwrap_or_default();
                 Some(SmtpConfig {
                     host,
                     port: smtp_port.unwrap_or(587),
@@ -2395,11 +2441,7 @@ impl Notifier {
             smtp_host: cfg.smtp.as_ref().map(|v| v.host.clone()),
             smtp_port: cfg.smtp.as_ref().map(|v| v.port),
             smtp_user: cfg.smtp.as_ref().and_then(|v| v.username.clone()),
-            smtp_pass_set: cfg
-                .smtp
-                .as_ref()
-                .and_then(|v| v.password.clone())
-                .is_some(),
+            smtp_pass_set: cfg.smtp.as_ref().and_then(|v| v.password.clone()).is_some(),
             smtp_from: cfg.smtp.as_ref().map(|v| v.from.clone()),
             smtp_to: cfg.smtp.as_ref().map(|v| v.to.join(",")),
             smtp_starttls: cfg.smtp.as_ref().map(|v| v.use_starttls).unwrap_or(true),
@@ -2540,15 +2582,18 @@ impl Notifier {
         let mut errors = Vec::new();
         for mode in modes {
             let transport_builder = match mode {
-                SmtpMode::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)
-                    .map_err(|err| format!("starttls config failed: {}", err))
-                    .map(|b| b.port(cfg.port)),
+                SmtpMode::StartTls => {
+                    AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)
+                        .map_err(|err| format!("starttls config failed: {}", err))
+                        .map(|b| b.port(cfg.port))
+                }
                 SmtpMode::TlsWrapper => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)
                     .map_err(|err| format!("tls config failed: {}", err))
                     .map(|b| b.port(cfg.port)),
-                SmtpMode::Plain => Ok(
-                    AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host).port(cfg.port),
-                ),
+                SmtpMode::Plain => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
+                    &cfg.host,
+                )
+                .port(cfg.port)),
             };
             let mut transport_builder = match transport_builder {
                 Ok(v) => v,
@@ -2587,13 +2632,14 @@ fn build_review_result_html(
         "#a03555"
     };
     let reminder_html = backlink_reminder
-        .map(|v| format!("<div style=\"margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff6db;color:#7a5b10;line-height:1.6;\">{}</div>", escape_html(v).replace('\n', "<br />")))
+        .map(|v| format!(r#"<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#fff6db;color:#7a5b10;line-height:1.6;">{}</div>"#, escape_html(v).replace('\n', "<br />")))
         .unwrap_or_default();
     let scope_html = review_scope_note
-        .map(|v| format!("<div style=\"margin-top:12px;padding:10px 12px;border-radius:10px;background:#f6f4ff;color:#3d3567;line-height:1.6;\">{}</div>", escape_html(v).replace('\n', "<br />")))
+        .map(|v| format!(r#"<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#f6f4ff;color:#3d3567;line-height:1.6;">{}</div>"#, escape_html(v).replace('\n', "<br />")))
         .unwrap_or_default();
     format!(
-        "<!doctype html><html><body style=\"margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;\"><div style=\"max-width:640px;margin:24px auto;padding:0 12px;\"><div style=\"border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);\"><div style=\"padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;\">Meow Links 审核通知</div><div style=\"padding:16px;\"><div style=\"display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;\">{status}</div><div style=\"margin-top:14px;line-height:1.75;\"><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href=\"{url}\" style=\"color:#5b4cc4;text-decoration:none;\">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div>{reminder}{scope}<div style=\"margin-top:14px;font-size:12px;color:#7b6b7a;\">此邮件由系统自动发送，请勿直接回复。</div></div></div></div></body></html>",
+        r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;"><div style="max-width:640px;margin:24px auto;padding:0 12px;"><div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);"><div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 审核通知</div><div style="padding:16px;"><div style="display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;">{status}</div><div style="margin-top:14px;line-height:1.75;"><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href="{url}" style="color:#5b4cc4;text-decoration:none;">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div>{reminder}{scope}<div style="margin-top:14px;font-size:12px;color:#7b6b7a;">此邮件由系统自动发送，请勿直接回复。</div></div></div></div></body></html>"#,
+        status_color = status_color,
         status = escape_html(status_text),
         name = escape_html(site_name),
         url = escape_html(site_url),
@@ -2608,17 +2654,27 @@ fn build_auto_review_admin_html(
     action: &str,
     site_name: &str,
     site_url: &str,
+    applicant_email: Option<&str>,
     review_note: &str,
 ) -> String {
-    let action_text = if action == "approve" { "APPROVE" } else { "REJECT" };
-    let status_color = if action == "approve" { "#2f8a58" } else { "#a03555" };
+    let action_text = if action == "approve" {
+        "APPROVE"
+    } else {
+        "REJECT"
+    };
+    let status_color = if action == "approve" {
+        "#2f8a58"
+    } else {
+        "#a03555"
+    };
     format!(
-        "<!doctype html><html><body style=\"margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;\"><div style=\"max-width:640px;margin:24px auto;padding:0 12px;\"><div style=\"border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);\"><div style=\"padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;\">Meow Links 自动审核结果</div><div style=\"padding:16px;\"><div style=\"display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;\">{action_text}</div><div style=\"margin-top:14px;line-height:1.75;\"><div><strong>application_id：</strong>{app_id}</div><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href=\"{url}\" style=\"color:#5b4cc4;text-decoration:none;\">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div><div style=\"margin-top:14px;font-size:12px;color:#7b6b7a;\">此邮件由系统自动发送。</div></div></div></div></body></html>",
+        r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;"><div style="max-width:640px;margin:24px auto;padding:0 12px;"><div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);"><div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 自动审核结果</div><div style="padding:16px;"><div style="display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;">{action_text}</div><div style="margin-top:14px;line-height:1.75;"><div><strong>application_id：</strong>{app_id}</div><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href="{url}" style="color:#5b4cc4;text-decoration:none;">{url}</a></div><div><strong>申请邮箱：</strong>{email}</div><div><strong>审核备注：</strong>{note}</div></div><div style="margin-top:14px;font-size:12px;color:#7b6b7a;">此邮件由系统自动发送。</div></div></div></div></body></html>"#,
         status_color = status_color,
         action_text = escape_html(action_text),
         app_id = application_id,
         name = escape_html(site_name),
         url = escape_html(site_url),
+        email = escape_html(applicant_email.unwrap_or("-")),
         note = escape_html(review_note),
     )
 }
@@ -2782,7 +2838,10 @@ fn extract_auto_link_tags(
     .to_lowercase();
 
     let tag_rules: [(&str, &[&str]); 5] = [
-        ("个人小站", &["个人小站", "个人站", "独立站", "小站", "personal site"]),
+        (
+            "个人小站",
+            &["个人小站", "个人站", "独立站", "小站", "personal site"],
+        ),
         (
             "个人主页",
             &["个人主页", "个人首页", "主页", "homepage", "about me"],
@@ -2802,10 +2861,12 @@ fn extract_auto_link_tags(
 }
 
 fn split_tag_tokens(raw: &str) -> Vec<String> {
-    raw.split(|c| c == ',' || c == '，' || c == ';' || c == '；' || c == '|' || c == '/' || c == '#')
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .collect()
+    raw.split(|c| {
+        c == ',' || c == '，' || c == ';' || c == '；' || c == '|' || c == '/' || c == '#'
+    })
+    .map(|v| v.trim().to_string())
+    .filter(|v| !v.is_empty())
+    .collect()
 }
 
 fn join_tags_with_limit(tags: Vec<String>, max_len: usize) -> Option<String> {
