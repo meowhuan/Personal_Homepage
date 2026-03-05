@@ -1,7 +1,12 @@
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::{HashMap, HashSet}, fs, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::PathBuf,
+    time::Duration,
+};
 
 #[derive(Deserialize)]
 struct ReviewTasksResponse {
@@ -68,7 +73,8 @@ struct WorkerConfig {
 
 #[tokio::main]
 async fn main() {
-    let base = std::env::var("REVIEW_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:7999".to_string());
+    let base =
+        std::env::var("REVIEW_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:7999".to_string());
     let token = std::env::var("REVIEW_REPORT_TOKEN").unwrap_or_else(|_| "KFCVME50".to_string());
     let interval_secs = std::env::var("REVIEW_LOOP_INTERVAL_SEC")
         .ok()
@@ -98,7 +104,8 @@ async fn main() {
     );
 
     loop {
-        if let Err(err) = run_once_cycle(&client, &base, &token, &state_file, &worker_config).await {
+        if let Err(err) = run_once_cycle(&client, &base, &token, &state_file, &worker_config).await
+        {
             eprintln!("[review-worker] run_once error: {}", err);
         }
         if run_once {
@@ -118,7 +125,10 @@ async fn run_once_cycle(
 ) -> Result<(), String> {
     let mut state = load_state(state_file);
     let tasks: ReviewTasksResponse = client
-        .get(format!("{}/links/review/report/tasks", base.trim_end_matches('/')))
+        .get(format!(
+            "{}/links/review/report/tasks",
+            base.trim_end_matches('/')
+        ))
         .header("x-token", token)
         .send()
         .await
@@ -128,7 +138,8 @@ async fn run_once_cycle(
         .map_err(|e| format!("decode tasks failed: {}", e))?;
 
     for app in &tasks.pending_applications {
-        let decision = evaluate_application(client, app, &tasks.backlink_target, worker_config).await;
+        let decision =
+            evaluate_application(client, app, &tasks.backlink_target, worker_config).await;
         eprintln!(
             "[review-worker] app#{} {} => action={} note={}",
             app.id, app.site_url, decision.action, decision.review_note
@@ -140,7 +151,10 @@ async fn run_once_cycle(
                 "send_admin_notify": true
             });
             match client
-                .post(format!("{}/links/review/report/manual", base.trim_end_matches('/')))
+                .post(format!(
+                    "{}/links/review/report/manual",
+                    base.trim_end_matches('/')
+                ))
                 .header("x-token", token)
                 .json(&payload)
                 .send()
@@ -155,7 +169,10 @@ async fn run_once_cycle(
                     );
                 }
                 Err(err) => {
-                    eprintln!("[review-worker] report manual app#{} failed: {}", app.id, err);
+                    eprintln!(
+                        "[review-worker] report manual app#{} failed: {}",
+                        app.id, err
+                    );
                 }
             }
             continue;
@@ -169,7 +186,10 @@ async fn run_once_cycle(
             "send_email": true
         });
         match client
-            .post(format!("{}/links/review/report/decision", base.trim_end_matches('/')))
+            .post(format!(
+                "{}/links/review/report/decision",
+                base.trim_end_matches('/')
+            ))
             .header("x-token", token)
             .json(&payload)
             .send()
@@ -184,7 +204,10 @@ async fn run_once_cycle(
                 );
             }
             Err(err) => {
-                eprintln!("[review-worker] report decision app#{} failed: {}", app.id, err);
+                eprintln!(
+                    "[review-worker] report decision app#{} failed: {}",
+                    app.id, err
+                );
             }
         }
     }
@@ -212,8 +235,7 @@ async fn run_once_cycle(
                     "removed_no_backlink",
                     &format!(
                         "友链已下架：在通过后 {} 小时内未检测到本站链接 {}",
-                        tasks.backlink_enforce_hours,
-                        tasks.backlink_target
+                        tasks.backlink_enforce_hours, tasks.backlink_target
                     ),
                 )
                 .await;
@@ -227,7 +249,10 @@ async fn run_once_cycle(
             continue;
         }
 
-        let entry = state.unreachable_since.entry(link.id.clone()).or_insert(now);
+        let entry = state
+            .unreachable_since
+            .entry(link.id.clone())
+            .or_insert(now);
         if now - *entry >= tasks.unreachable_enforce_hours.max(1) * 3600 {
             report_removal(
                 client,
@@ -236,7 +261,10 @@ async fn run_once_cycle(
                 &link.id,
                 link.application_id,
                 "removed_unreachable",
-                &format!("友链已下架：连续 {} 小时无法访问", tasks.unreachable_enforce_hours),
+                &format!(
+                    "友链已下架：连续 {} 小时无法访问",
+                    tasks.unreachable_enforce_hours
+                ),
             )
             .await;
             state.unreachable_since.remove(&link.id);
@@ -272,6 +300,13 @@ async fn evaluate_application(
         score -= 40;
         reasons.push("域名风险较高".to_string());
     }
+    if is_disallowed_public_service_domain(&app.site_url) {
+        return Decision {
+            action: "reject",
+            sort_order: None,
+            review_note: "auto-score=0；学校/政府网站不接受友链互换申请".to_string(),
+        };
+    }
     let full_text = format!(
         "{} {} {}",
         app.site_name,
@@ -282,12 +317,7 @@ async fn evaluate_application(
         score -= 80;
         reasons.push("命中垃圾关键词".to_string());
     }
-    let desc_len = app
-        .description
-        .clone()
-        .unwrap_or_default()
-        .chars()
-        .count();
+    let desc_len = app.description.clone().unwrap_or_default().chars().count();
     if desc_len >= 8 && desc_len <= 180 {
         score += 12;
     } else {
@@ -343,7 +373,12 @@ async fn evaluate_application(
                 };
                 let delta = map_remote_score_to_delta(remote_score, max_bonus);
                 score += delta;
-                reasons.push(format!("第三方SEO={}({:+}) {}", remote_score, delta, reason.unwrap_or_default()));
+                reasons.push(format!(
+                    "第三方SEO={}({:+}) {}",
+                    remote_score,
+                    delta,
+                    reason.unwrap_or_default()
+                ));
             }
             Err(err) => {
                 reasons.push(format!("第三方SEO不可用({})", err));
@@ -360,7 +395,11 @@ async fn evaluate_application(
     };
     Decision {
         action,
-        sort_order: if action == "approve" { Some(now_ts()) } else { None },
+        sort_order: if action == "approve" {
+            Some(now_ts())
+        } else {
+            None
+        },
         review_note: format!("auto-score={}；{}", score, reasons.join("；")),
     }
 }
@@ -381,14 +420,12 @@ async fn fetch_generic_seo_score(
     cfg: &SeoApiConfig,
     app: &PendingApplicationTask,
 ) -> Result<(i32, Option<String>), String> {
-    let mut request = client
-        .post(&cfg.url)
-        .json(&json!({
-            "url": app.site_url,
-            "site_name": app.site_name,
-            "description": app.description.clone().unwrap_or_default(),
-            "note": app.note.clone().unwrap_or_default()
-        }));
+    let mut request = client.post(&cfg.url).json(&json!({
+        "url": app.site_url,
+        "site_name": app.site_name,
+        "description": app.description.clone().unwrap_or_default(),
+        "note": app.note.clone().unwrap_or_default()
+    }));
     if let Some(api_key) = &cfg.api_key {
         request = request.header(&cfg.api_key_header, api_key);
     }
@@ -514,7 +551,10 @@ async fn report_removal(
         "send_email": true
     });
     match client
-        .post(format!("{}/links/review/report/removal", base.trim_end_matches('/')))
+        .post(format!(
+            "{}/links/review/report/removal",
+            base.trim_end_matches('/')
+        ))
         .header("x-token", token)
         .json(&payload)
         .send()
@@ -529,7 +569,10 @@ async fn report_removal(
             );
         }
         Err(err) => {
-            eprintln!("[review-worker] report removal link={} failed: {}", link_id, err);
+            eprintln!(
+                "[review-worker] report removal link={} failed: {}",
+                link_id, err
+            );
         }
     }
 }
@@ -570,6 +613,8 @@ async fn find_backlink_in_site(
     }
 
     let mut candidates = collect_friend_page_candidates(&base, &home_html_owned);
+    let mut dynamic_candidates = collect_dynamic_page_candidates(&base, &home_html_owned);
+    candidates.append(&mut dynamic_candidates);
     if let Some(mut sitemap_urls) = load_sitemap_candidates(client, &base).await {
         candidates.append(&mut sitemap_urls);
     }
@@ -596,7 +641,15 @@ async fn find_backlink_in_site(
 fn collect_friend_page_candidates(base: &Url, html: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    let keywords = ["friend", "friends", "link", "links", "blogroll", "友链", "友情链接"];
+    let keywords = [
+        "friend",
+        "friends",
+        "link",
+        "links",
+        "blogroll",
+        "友链",
+        "友情链接",
+    ];
     for href in extract_hrefs(html) {
         if is_non_web_href(&href) {
             continue;
@@ -635,7 +688,15 @@ async fn load_sitemap_candidates(client: &reqwest::Client, base: &Url) -> Option
     let (_, xml) = fetch_site(client, sitemap_url.as_str()).await?;
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    let keywords = ["friend", "friends", "link", "links", "blogroll", "友链", "友情链接"];
+    let keywords = [
+        "friend",
+        "friends",
+        "link",
+        "links",
+        "blogroll",
+        "友链",
+        "友情链接",
+    ];
     for loc in extract_sitemap_locs(&xml) {
         let lower = loc.to_lowercase();
         if !keywords.iter().any(|k| lower.contains(k)) {
@@ -720,6 +781,79 @@ fn extract_sitemap_locs(xml: &str) -> Vec<String> {
     out
 }
 
+fn collect_dynamic_page_candidates(base: &Url, html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let keywords = [
+        "friend",
+        "friends",
+        "link",
+        "links",
+        "blogroll",
+        "youqing",
+        "友链",
+        "友情链接",
+    ];
+
+    for raw in extract_quoted_candidates(html) {
+        let lower = raw.to_lowercase();
+        if !keywords.iter().any(|k| lower.contains(k)) {
+            continue;
+        }
+        if let Some(url) = resolve_same_site_url(base, &raw) {
+            if seen.insert(url.clone()) {
+                out.push(url);
+            }
+        }
+    }
+
+    out
+}
+
+fn extract_quoted_candidates(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = content.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        if ch != b'"' && ch != b'\'' {
+            i += 1;
+            continue;
+        }
+        let quote = ch;
+        let start = i + 1;
+        let mut j = start;
+        while j < bytes.len() {
+            if bytes[j] == quote && bytes[j.saturating_sub(1)] != b'\\' {
+                break;
+            }
+            j += 1;
+        }
+        if j <= bytes.len() && start < j {
+            let candidate = content[start..j].trim();
+            if looks_like_route_or_url(candidate) {
+                out.push(candidate.to_string());
+            }
+        }
+        i = j.saturating_add(1);
+    }
+    out
+}
+
+fn looks_like_route_or_url(value: &str) -> bool {
+    let v = value.trim();
+    if v.len() < 2 || v.len() > 240 {
+        return false;
+    }
+    if v.starts_with("http://") || v.starts_with("https://") {
+        return true;
+    }
+    if !v.starts_with('/') {
+        return false;
+    }
+    !is_non_web_href(v)
+}
+
 fn is_non_web_href(href: &str) -> bool {
     let lower = href.trim().to_lowercase();
     lower.starts_with('#')
@@ -765,13 +899,26 @@ fn contains_backlink(page_lower: &str, backlink_target: &str) -> bool {
 
 fn contains_spam_keyword(content: &str) -> bool {
     let text = content.to_lowercase();
-    let spam_words = ["博彩", "彩票", "娱乐城", "代刷", "赌博", "av", "色情", "vpn", "加速器", "私服"];
+    let spam_words = [
+        "博彩",
+        "彩票",
+        "娱乐城",
+        "代刷",
+        "赌博",
+        "av",
+        "色情",
+        "vpn",
+        "加速器",
+        "私服",
+    ];
     spam_words.iter().any(|word| text.contains(word))
 }
 
 fn looks_suspicious_domain(site_url: &str) -> bool {
     let parsed = Url::parse(site_url);
-    let host = parsed.ok().and_then(|url| url.host_str().map(|h| h.to_lowercase()));
+    let host = parsed
+        .ok()
+        .and_then(|url| url.host_str().map(|h| h.to_lowercase()));
     match host {
         Some(host) => {
             host == "localhost"
@@ -781,6 +928,23 @@ fn looks_suspicious_domain(site_url: &str) -> bool {
                 || host.ends_with(".local")
         }
         None => true,
+    }
+}
+
+fn is_disallowed_public_service_domain(site_url: &str) -> bool {
+    let host = Url::parse(site_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|h| h.to_lowercase()));
+    match host {
+        Some(host) => {
+            host == "edu"
+                || host.ends_with(".edu")
+                || host.ends_with(".edu.cn")
+                || host == "gov"
+                || host.ends_with(".gov")
+                || host.ends_with(".gov.cn")
+        }
+        None => false,
     }
 }
 

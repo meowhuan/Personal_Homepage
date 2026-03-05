@@ -86,8 +86,13 @@ const submitApply = async () => {
 
   const siteName = form.site_name.trim();
   const siteUrl = normalizeUrl(form.site_url);
-  if (!siteName || !siteUrl) {
-    submitError.value = "请至少填写站点名称和站点地址。";
+  const email = form.email.trim();
+  if (!siteName || !siteUrl || !email) {
+    submitError.value = "请填写站点名称、站点地址和联系邮箱。";
+    return;
+  }
+  if (siteName.length > 32) {
+    submitError.value = "站点名称最多 32 个字符。";
     return;
   }
 
@@ -103,7 +108,7 @@ const submitApply = async () => {
         site_url: siteUrl,
         avatar_url: normalizeUrl(form.avatar_url),
         description: form.description.trim(),
-        email: form.email.trim(),
+        email,
         note: form.note.trim()
       })
     });
@@ -293,7 +298,7 @@ onBeforeUnmount(() => {
                 v-model.trim="form.site_name"
                 type="text"
                 required
-                maxlength="64"
+                maxlength="32"
                 placeholder="站点名称 *"
                 class="meow-input"
                 :class="isNight ? 'meow-input-night' : ''"
@@ -318,8 +323,9 @@ onBeforeUnmount(() => {
               <input
                 v-model.trim="form.email"
                 type="email"
+                required
                 maxlength="128"
-                placeholder="联系邮箱"
+                placeholder="联系邮箱 *"
                 class="meow-input"
                 :class="isNight ? 'meow-input-night' : ''"
               />
