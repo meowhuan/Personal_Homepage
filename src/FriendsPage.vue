@@ -25,6 +25,11 @@ const verifyHint = reactive({
   verify_deadline: 0,
   actionLoading: false
 });
+const modal = reactive({
+  open: false,
+  title: "",
+  message: ""
+});
 const applyConfig = reactive({
   captcha_enabled: false,
   captcha_provider: "",
@@ -172,8 +177,10 @@ const triggerHttpVerify = async () => {
     submitSuccess.value = data?.message || "HTTP 验证成功";
     verifyHint.message = submitSuccess.value;
     verifyHint.verify_status = "pending";
+    openModal("验证成功", submitSuccess.value);
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : "HTTP 验证失败";
+    openModal("验证失败", submitError.value);
   } finally {
     verifyHint.actionLoading = false;
   }
@@ -193,11 +200,23 @@ const sendVerifyEmail = async () => {
     if (!res.ok) throw new Error(data?.message || "发送验证邮件失败");
     submitSuccess.value = data?.message || "验证邮件已发送";
     verifyHint.message = submitSuccess.value;
+    openModal("邮件已发送", submitSuccess.value);
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : "发送验证邮件失败";
+    openModal("发送失败", submitError.value);
   } finally {
     verifyHint.actionLoading = false;
   }
+};
+
+const openModal = (title, message) => {
+  modal.title = title || "提示";
+  modal.message = message || "";
+  modal.open = true;
+};
+
+const closeModal = () => {
+  modal.open = false;
 };
 
 const getCaptchaToken = () => {
@@ -311,11 +330,13 @@ const copyText = async (text) => {
       document.body.removeChild(input);
     }
     copyStatus.value = "已复制";
+    openModal("已复制", "内容已复制到剪贴板。");
     window.setTimeout(() => {
       copyStatus.value = "";
     }, 1400);
   } catch {
     copyStatus.value = "复制失败，请手动复制";
+    openModal("复制失败", "请手动复制内容。");
   }
 };
 
@@ -557,7 +578,14 @@ onBeforeUnmount(() => {
                   <code class="rounded-lg border px-2 py-1 text-[11px]" :class="isNight ? 'border-meow-night-line bg-meow-night-bg' : 'border-meow-line bg-white'">
                     {{ verifyHint.verify_token }}
                   </code>
-                  <button type="button" class="meow-btn-ghost" @click="copyText(verifyHint.verify_token)">复制 token</button>
+                  <button
+                    type="button"
+                    class="meow-btn-ghost"
+                    :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+                    @click="copyText(verifyHint.verify_token)"
+                  >
+                    复制 token
+                  </button>
                 </div>
                 <div class="mt-2 space-y-1" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                   <div>HTTP 文件：在 `/.well-known/meow-links.txt` 写入 token（任意位置包含即可）</div>
@@ -578,6 +606,7 @@ onBeforeUnmount(() => {
                   type="button"
                   class="meow-btn-ghost"
                   :disabled="verifyHint.actionLoading"
+                  :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
                   @click="triggerHttpVerify"
                 >
                   {{ verifyHint.actionLoading ? "处理中..." : "我已完成HTTP验证" }}
@@ -586,6 +615,7 @@ onBeforeUnmount(() => {
                   type="button"
                   class="meow-btn-ghost"
                   :disabled="verifyHint.actionLoading"
+                  :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
                   @click="sendVerifyEmail"
                 >
                   发送邮箱验证链接
@@ -645,6 +675,31 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </main>
+  </div>
+  <div
+    v-if="modal.open"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    @click.self="closeModal"
+  >
+    <div
+      class="w-full max-w-sm rounded-2xl border p-4 shadow-lg"
+      :class="isNight ? 'border-meow-night-line bg-meow-night-card text-meow-night-ink' : 'border-meow-line bg-white text-meow-ink'"
+    >
+      <div class="text-sm font-700">{{ modal.title }}</div>
+      <p class="mt-2 text-xs leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+        {{ modal.message }}
+      </p>
+      <div class="mt-3 flex justify-end">
+        <button
+          type="button"
+          class="meow-btn-ghost"
+          :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-bg' : ''"
+          @click="closeModal"
+        >
+          知道了
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
