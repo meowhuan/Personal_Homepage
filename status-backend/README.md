@@ -128,8 +128,6 @@ STATUS_TOKEN=your_token
   - 含 `description`：`+5`
   - 含 `meta`：`+6`（否则 `-6`）
 - 名称一致性检查（`site_name` vs `<title>`）：
-  - `sim < REVIEW_TITLE_SIM_REJECT_BELOW`：自动拒绝
-  - `REVIEW_TITLE_SIM_REJECT_BELOW <= sim < REVIEW_TITLE_SIM_PENDING_BELOW`：转人工
 - 包含本站链接（`LINK_BACKLINK_TARGET`）：`+10`，否则 `-10`
 - 第三方 SEO 接口（可选，内网 worker 配置后生效）：
   - `REVIEW_SEO_PROVIDER=generic`：调用自定义评分接口，返回 `score (0~100)`
@@ -158,8 +156,6 @@ Playwright 渲染抓取可选环境变量（`review-reporter`）：
 - `REVIEW_JS_RENDER_WAIT_UNTIL`（`load`/`domcontentloaded`/`networkidle`，默认 `networkidle`）
 - `REVIEW_JS_RENDER_WAIT_AFTER_MS`（默认 `800`，范围 `0~5000`）
 - `REVIEW_JS_RENDER_MAX_PAGES`（每次回链检测最多渲染页数，默认 `2`，范围 `1~8`）
-- `REVIEW_TITLE_SIM_PENDING_BELOW`（默认 `0.35`，低于该值转人工）
-- `REVIEW_TITLE_SIM_REJECT_BELOW`（默认 `0.18`，低于该值自动拒绝）
 
 ### 3) 邮件通知触发
 

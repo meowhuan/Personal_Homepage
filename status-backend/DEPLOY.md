@@ -135,8 +135,6 @@ sudo systemctl enable --now review-reporter
 - `REVIEW_RUN_ONCE` (optional, `1/true` to run single cycle then exit, useful for debugging)
 - `REVIEW_SEO_PROVIDER` (optional: `none`/`generic`/`serpapi`, default `none`)
 - `REVIEW_SEO_MAX_BONUS` (optional, default `12`, range `1~30`)
-- `REVIEW_TITLE_SIM_PENDING_BELOW` (optional, default `0.35`)
-- `REVIEW_TITLE_SIM_REJECT_BELOW` (optional, default `0.18`)
 - `REVIEW_JS_RENDER` (optional, `1/true` to enable Playwright rendering fallback for backlink detection)
 - `REVIEW_JS_RENDER_CMD` (optional, default `node`)
 - `REVIEW_JS_RENDER_SCRIPT` (optional, default `scripts/playwright-fetch.mjs`)

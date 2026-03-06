@@ -81,8 +81,6 @@ struct JsRenderConfig {
 struct WorkerConfig {
     seo_provider: Option<SeoProviderConfig>,
     js_render: Option<JsRenderConfig>,
-    title_similarity_pending_below: f32,
-    title_similarity_reject_below: f32,
 }
 
 #[tokio::main]
@@ -110,13 +108,11 @@ async fn main() {
         .build()
         .expect("build client");
     eprintln!(
-        "[review-worker] started: api_base={} interval_sec={} seo_provider={} js_render={} title_sim(pending<{:.2},reject<{:.2}) run_once={}",
+        "[review-worker] started: api_base={} interval_sec={} seo_provider={} js_render={} run_once={}",
         base,
         interval_secs,
         worker_config.provider_label(),
         worker_config.js_render_label(),
-        worker_config.title_similarity_pending_below,
-        worker_config.title_similarity_reject_below,
         run_once
     );
 
@@ -356,18 +352,7 @@ async fn evaluate_application(
             reasons.push("站点主页访问失败".to_string());
         }
         let lower = html.to_lowercase();
-        if let Some(title) = extract_html_title(&html) {
-            let similarity = title_name_similarity(&app.site_name, &title);
-            if similarity < worker_config.title_similarity_reject_below {
-                force_reject_reason = Some(format!(
-                    "站点名称与页面标题明显不匹配(sim={:.2})",
-                    similarity
-                ));
-            } else if similarity < worker_config.title_similarity_pending_below {
-                force_pending = true;
-                reasons.push(format!("站点名称与页面标题相似度偏低(sim={:.2})", similarity));
-            }
-        } else {
+        if extract_html_title(&html).is_none() {
             force_pending = true;
             reasons.push("未提取到页面标题，转人工复核".to_string());
         }
@@ -1280,22 +1265,9 @@ impl WorkerConfig {
                     .unwrap_or(2)
                     .clamp(1, 8),
             });
-        let title_similarity_pending_below = std::env::var("REVIEW_TITLE_SIM_PENDING_BELOW")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.35)
-            .clamp(0.05, 0.95);
-        let title_similarity_reject_below = std::env::var("REVIEW_TITLE_SIM_REJECT_BELOW")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.18)
-            .clamp(0.01, 0.80)
-            .min((title_similarity_pending_below - 0.01).max(0.01));
         Self {
             seo_provider,
             js_render,
-            title_similarity_pending_below,
-            title_similarity_reject_below,
         }
     }
 
