@@ -451,7 +451,7 @@ onBeforeUnmount(() => {
               <div class="mt-1">申请提交后不会立即进入审核，需先完成以下任一验证：</div>
               <div>1. HTTP 验证：在站点 `/.well-known/meow-links.txt` 写入 token；</div>
               <div>2. DNS 验证：添加 TXT 记录 `_meow-links`，值包含 token；</div>
-              <div>3. Meta 验证：首页 `<head>` 加入 `<meta name="meow-links" content="TOKEN">`（TOKEN 为下方提供的验证 token）；</div>
+              <div>3. Meta 验证：首页 `&lt;head&gt;` 加入 `&lt;meta name="meow-links" content="TOKEN"&gt;`（TOKEN 为下方提供的验证 token）；</div>
               <div>4. 邮箱验证：向申请邮箱发送验证链接并点击确认。</div>
             </div>
             <form class="mt-4 space-y-3" @submit.prevent="submitApply">
