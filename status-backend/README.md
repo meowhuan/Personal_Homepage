@@ -96,7 +96,7 @@ STATUS_TOKEN=your_token
 `/links/apply` 风控：支持 captcha（Turnstile/hCaptcha）、按 IP 与网段/IP前缀限流、按邮箱域与站点域限流、一次性邮箱拦截、`edu/gov` 邮箱拦截、站点域名黑名单拦截。申请提交后默认状态为 `verify_pending`，完成以下任一验证后才进入 `pending` 审核队列：
 - HTTP 文件：`/.well-known/meow-links.txt` 内容包含 token
 - DNS TXT：`_meow-links.<domain>` 记录包含 token
-- 首页 meta：`<meta name="meow-links" content="TOKEN">`
+- 首页 meta：在首页 `<head>` 加入 `<meta name="meow-links" content="TOKEN">`（TOKEN 为验证 token）
 - 邮箱验证：点击验证邮件链接
 审查拆分：公网后端不再主动抓取外站（避免暴露公网服务器 IP）。请将审查任务部署在内网服务，由内网服务调用 `.../review/report/...` 接口将审核/下架结果上报回公网后端。
 内网审查服务（`review-reporter`）的发行版部署与 systemd 常驻配置见 `status-backend/DEPLOY.md`。
