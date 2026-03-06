@@ -1811,11 +1811,25 @@ async fn links_verify_email_send(
         site_name, verify_url, token
     );
     let html = format!(
-        "<p>站点：{}</p><p>请点击以下链接完成邮箱验证（完成后进入审核队列）：</p><p><a href=\"{}\">{}</a></p><p>若无法点击，可复制 token：<code>{}</code></p>",
-        escape_html(&site_name),
-        escape_html(&verify_url),
-        escape_html(&verify_url),
-        escape_html(&token)
+        r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;">
+<div style="max-width:640px;margin:24px auto;padding:0 12px;">
+  <div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);">
+    <div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 邮箱验证</div>
+    <div style="padding:16px;line-height:1.75;">
+      <div><strong>站点：</strong>{name}</div>
+      <div style="margin-top:10px;">请点击以下链接完成邮箱验证（完成后进入审核队列）：</div>
+      <div style="margin-top:8px;"><a href="{url}" style="color:#5b4cc4;text-decoration:none;word-break:break-all;">{url}</a></div>
+      <div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#f6f4ff;color:#3d3567;font-size:12px;">
+        若无法点击，可复制 token：<code style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono',monospace;">{token}</code>
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:#7b6b7a;">此邮件由系统自动发送，请勿直接回复。</div>
+    </div>
+  </div>
+</div>
+</body></html>"#,
+        name = escape_html(&site_name),
+        url = escape_html(&verify_url),
+        token = escape_html(&token)
     );
     match state
         .notifier
