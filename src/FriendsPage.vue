@@ -28,7 +28,8 @@ const verifyHint = reactive({
 const applyConfig = reactive({
   captcha_enabled: false,
   captcha_provider: "",
-  captcha_site_key: ""
+  captcha_site_key: "",
+  captcha_secret_set: true
 });
 const captchaWidgetId = ref(null);
 
@@ -266,11 +267,13 @@ const loadApplyConfig = async () => {
     applyConfig.captcha_enabled = Boolean(cfg?.captcha_enabled);
     applyConfig.captcha_provider = String(cfg?.captcha_provider || "").trim();
     applyConfig.captcha_site_key = String(cfg?.captcha_site_key || "").trim();
+    applyConfig.captcha_secret_set = cfg?.captcha_secret_set !== false;
     await renderCaptchaWidget();
   } catch {
     applyConfig.captcha_enabled = false;
     applyConfig.captcha_provider = "";
     applyConfig.captcha_site_key = "";
+    applyConfig.captcha_secret_set = true;
   }
 };
 
@@ -514,6 +517,12 @@ onBeforeUnmount(() => {
                 <div :id="CAPTCHA_CONTAINER_ID"></div>
                 <p class="mt-2 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                   已启用人机验证，请完成后提交。
+                </p>
+                <p
+                  v-if="!applyConfig.captcha_secret_set"
+                  class="mt-1 text-[11px] text-[#e45883]"
+                >
+                  管理端尚未配置验证 Secret，验证码可能无法通过校验。
                 </p>
               </div>
               <button

@@ -358,6 +358,7 @@ struct LinkApplyConfigResponse {
     captcha_provider: Option<String>,
     captcha_site_key: Option<String>,
     captcha_enabled: bool,
+    captcha_secret_set: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -2835,17 +2836,34 @@ async fn links_settings_set(
 }
 
 async fn links_apply_config(State(state): State<AppState>) -> impl IntoResponse {
-    let anti = {
+    let (provider, site_key, secret_set) = {
         let conn = state.db.lock().unwrap();
-        resolve_anti_abuse_config(&conn, &state.anti_abuse)
+        let provider = read_setting(&conn, "captcha_provider")
+            .or_else(|| {
+                state
+                    .anti_abuse
+                    .captcha
+                    .as_ref()
+                    .map(|cfg| cfg.provider.as_str().to_string())
+            })
+            .unwrap_or_default();
+        let site_key = read_setting(&conn, "captcha_site_key")
+            .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.site_key.clone()))
+            .unwrap_or_default();
+        let secret_set = read_setting(&conn, "captcha_secret")
+            .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.secret.clone()))
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        (provider, site_key, secret_set)
     };
+    let provider = provider.trim().to_string();
+    let site_key = site_key.trim().to_string();
+    let captcha_enabled = !provider.is_empty() && !site_key.is_empty();
     let response = LinkApplyConfigResponse {
-        captcha_provider: anti
-            .captcha
-            .as_ref()
-            .map(|cfg| cfg.provider.as_str().to_string()),
-        captcha_site_key: anti.captcha.as_ref().map(|cfg| cfg.site_key.clone()),
-        captcha_enabled: anti.captcha.is_some(),
+        captcha_provider: if provider.is_empty() { None } else { Some(provider) },
+        captcha_site_key: if site_key.is_empty() { None } else { Some(site_key) },
+        captcha_enabled,
+        captcha_secret_set: Some(secret_set),
     };
     (StatusCode::OK, Json(response)).into_response()
 }
