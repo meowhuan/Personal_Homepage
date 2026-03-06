@@ -253,6 +253,7 @@ struct LinkVerifyHttpPayload {
 #[derive(Deserialize)]
 struct LinkVerifyEmailSendPayload {
     application_id: i64,
+    verify_token: String,
 }
 
 #[derive(Deserialize)]
@@ -323,7 +324,7 @@ struct LinkSettingsResponse {
     block_disposable_email: bool,
     block_edu_gov_email: bool,
     apply_deny_hosts: Option<String>,
-    verify_window_hours: i64,
+    verify_window_minutes: i64,
     public_base_url: Option<String>,
 }
 
@@ -349,7 +350,7 @@ struct LinkSettingsPayload {
     block_disposable_email: Option<bool>,
     block_edu_gov_email: Option<bool>,
     apply_deny_hosts: Option<String>,
-    verify_window_hours: Option<i64>,
+    verify_window_minutes: Option<i64>,
     public_base_url: Option<String>,
 }
 
@@ -464,6 +465,8 @@ struct AntiAbuseConfig {
     deny_hosts: HashSet<String>,
     verify_window_secs: i64,
     public_base_url: Option<String>,
+    verify_email_rate_limit_window_secs: i64,
+    verify_email_rate_limit_max: i64,
 }
 
 #[derive(Clone)]
@@ -587,6 +590,12 @@ async fn main() {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS friend_link_verify_email_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER NOT NULL,
+            ip TEXT,
+            created_at INTEGER NOT NULL
         );",
     )
     .expect("init db");
@@ -1716,6 +1725,7 @@ async fn links_verify_http(
 
 async fn links_verify_email_send(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<LinkVerifyEmailSendPayload>,
 ) -> impl IntoResponse {
     let anti_abuse = {
@@ -1797,6 +1807,45 @@ async fn links_verify_email_send(
         )
             .into_response();
     };
+    if token != payload.verify_token.trim() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiMessage {
+                message: "验证 token 不匹配".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let ip = client_ip(&headers).or_else(|| Some("unknown".to_string()));
+    let ip_value = ip.as_deref().unwrap_or("unknown");
+    {
+        let conn = state.db.lock().unwrap();
+        let recent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_link_verify_email_log
+                 WHERE ip = ?1 AND created_at >= ?2",
+                params![
+                    ip_value,
+                    now - anti_abuse.verify_email_rate_limit_window_secs
+                ],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if recent_count >= anti_abuse.verify_email_rate_limit_max {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiMessage {
+                    message: "验证邮件发送过于频繁，请稍后再试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        let _ = conn.execute(
+            "INSERT INTO friend_link_verify_email_log (application_id, ip, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![payload.application_id, ip_value, now],
+        );
+    }
     let notify_cfg = {
         let conn = state.db.lock().unwrap();
         state.notifier.runtime_config(&conn)
@@ -2804,10 +2853,10 @@ async fn links_settings_set(
                 .map(|v| v.trim().chars().take(1024).collect::<String>()),
         ),
         (
-            "verify_window_hours",
+            "verify_window_minutes",
             payload
-                .verify_window_hours
-                .map(|v| v.clamp(6, 240).to_string()),
+                .verify_window_minutes
+                .map(|v| v.clamp(10, 1440).to_string()),
         ),
         (
             "public_base_url",
@@ -3469,13 +3518,30 @@ impl AntiAbuseConfig {
             .unwrap_or(true);
         let deny_hosts_raw = normalize_env("LINK_APPLY_DENY_HOSTS");
         let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
-        let verify_window_secs = std::env::var("LINK_VERIFY_WINDOW_HOURS")
+        let verify_window_secs = std::env::var("LINK_VERIFY_WINDOW_MINUTES")
             .ok()
             .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(72)
-            .clamp(6, 240)
-            * 3600;
+            .or_else(|| {
+                std::env::var("LINK_VERIFY_WINDOW_HOURS")
+                    .ok()
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .map(|h| h * 60)
+            })
+            .unwrap_or(120)
+            .clamp(10, 1440)
+            * 60;
         let public_base_url = normalize_env("LINK_PUBLIC_BASE_URL");
+        let verify_email_rate_limit_window_secs =
+            std::env::var("LINK_VERIFY_EMAIL_RATE_LIMIT_WINDOW_SEC")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(1800)
+                .clamp(60, 86400);
+        let verify_email_rate_limit_max = std::env::var("LINK_VERIFY_EMAIL_RATE_LIMIT_MAX")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(3)
+            .clamp(1, 20);
 
         Self {
             captcha,
@@ -3490,6 +3556,8 @@ impl AntiAbuseConfig {
             deny_hosts,
             verify_window_secs,
             public_base_url,
+            verify_email_rate_limit_window_secs,
+            verify_email_rate_limit_max,
         }
     }
 }
@@ -3651,11 +3719,24 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
         .unwrap_or(defaults.edu_gov_email_block);
     let deny_hosts_raw = read_setting(conn, "apply_deny_hosts").or_else(|| defaults.deny_hosts_raw.clone());
     let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
-    let verify_window_secs = read_setting(conn, "verify_window_hours")
+    let verify_window_secs = read_setting(conn, "verify_window_minutes")
         .and_then(|v| v.parse::<i64>().ok())
-        .map(|h| h.clamp(6, 240) * 3600)
+        .map(|m| m.clamp(10, 1440) * 60)
+        .or_else(|| {
+            read_setting(conn, "verify_window_hours")
+                .and_then(|v| v.parse::<i64>().ok())
+                .map(|h| h.clamp(1, 48) * 3600)
+        })
         .unwrap_or(defaults.verify_window_secs);
     let public_base_url = read_setting(conn, "public_base_url").or_else(|| defaults.public_base_url.clone());
+    let verify_email_rate_limit_window_secs = read_setting(conn, "verify_email_rate_limit_window_sec")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.verify_email_rate_limit_window_secs)
+        .clamp(60, 86400);
+    let verify_email_rate_limit_max = read_setting(conn, "verify_email_rate_limit_max")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.verify_email_rate_limit_max)
+        .clamp(1, 20);
 
     AntiAbuseConfig {
         captcha,
@@ -3670,6 +3751,8 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
         deny_hosts,
         verify_window_secs,
         public_base_url,
+        verify_email_rate_limit_window_secs,
+        verify_email_rate_limit_max,
     }
 }
 
@@ -3798,7 +3881,7 @@ fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSett
         block_disposable_email: anti.disposable_email_block,
         block_edu_gov_email: anti.edu_gov_email_block,
         apply_deny_hosts: anti.deny_hosts_raw.clone(),
-        verify_window_hours: (anti.verify_window_secs / 3600).max(1),
+        verify_window_minutes: (anti.verify_window_secs / 60).max(10),
         public_base_url: anti.public_base_url.clone(),
     }
 }

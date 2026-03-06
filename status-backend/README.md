@@ -47,8 +47,10 @@ cargo run
 - `LINK_BLOCK_DISPOSABLE_EMAIL` (optional, default `true`)
 - `LINK_BLOCK_EDU_GOV_EMAIL` (optional, default `true`)
 - `LINK_APPLY_DENY_HOSTS` (optional, additional blocked host list; separated by comma/semicolon)
-- `LINK_VERIFY_WINDOW_HOURS` (optional, default `72`, verification window before review)
+- `LINK_VERIFY_WINDOW_MINUTES` (optional, default `120`, verification window before review)
 - `LINK_PUBLIC_BASE_URL` (optional, used for email verification link base url)
+- `LINK_VERIFY_EMAIL_RATE_LIMIT_WINDOW_SEC` (optional, default `1800`, rate limit window)
+- `LINK_VERIFY_EMAIL_RATE_LIMIT_MAX` (optional, default `3`, max sends per IP within window)
 
 `.env` 示例 / Example:
 
@@ -76,7 +78,7 @@ STATUS_TOKEN=your_token
 - `POST /links/apply` (友链申请，无需 token，支持 TG/SMTP 通知)
 - `GET /links/apply/config` (公开申请配置，返回 captcha provider/site key)
 - `POST /links/verify/http` (公开验证接口：检测 `/.well-known/meow-links.txt` token)
-- `POST /links/verify/email/send` (公开验证接口：发送邮箱验证链接)
+- `POST /links/verify/email/send` (公开验证接口：发送邮箱验证链接，需携带申请时的 `verify_token`)
 - `GET /links/verify/email?token=...` (公开验证接口：点击后进入审核队列)
 - `GET /links/applications` (需要 token，申请列表)
 - `POST /links/review` (需要 token，审核通过/拒绝)

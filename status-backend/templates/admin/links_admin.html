@@ -242,8 +242,8 @@
                 <input id="apply_deny_hosts" type="text" placeholder="如：aliyun.com,qq.com,baidu.com" />
               </div>
               <div>
-                <label>验证窗口（小时）</label>
-                <input id="verify_window_hours" type="number" min="6" max="240" />
+                <label>验证窗口（分钟）</label>
+                <input id="verify_window_minutes" type="number" min="10" max="1440" />
               </div>
               <div>
                 <label>公开基址（用于验证邮件链接）</label>
@@ -330,7 +330,7 @@
           block_disposable_email: document.getElementById("block_disposable_email").checked,
           block_edu_gov_email: document.getElementById("block_edu_gov_email").checked,
           apply_deny_hosts: document.getElementById("apply_deny_hosts").value.trim(),
-          verify_window_hours: Number(document.getElementById("verify_window_hours").value || 0) || null,
+          verify_window_minutes: Number(document.getElementById("verify_window_minutes").value || 0) || null,
           public_base_url: document.getElementById("public_base_url").value.trim()
         };
       };
@@ -357,7 +357,7 @@
         document.getElementById("block_disposable_email").checked = cfg.block_disposable_email !== false;
         document.getElementById("block_edu_gov_email").checked = cfg.block_edu_gov_email !== false;
         document.getElementById("apply_deny_hosts").value = cfg.apply_deny_hosts || "";
-        document.getElementById("verify_window_hours").value = Number(cfg.verify_window_hours || 72);
+        document.getElementById("verify_window_minutes").value = Number(cfg.verify_window_minutes || 120);
         document.getElementById("public_base_url").value = cfg.public_base_url || "";
       };
 
