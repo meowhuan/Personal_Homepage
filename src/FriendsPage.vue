@@ -194,7 +194,10 @@ const sendVerifyEmail = async () => {
     const res = await fetch(VERIFY_EMAIL_SEND_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ application_id: verifyHint.application_id })
+      body: JSON.stringify({
+        application_id: verifyHint.application_id,
+        verify_token: verifyHint.verify_token || ""
+      })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.message || "发送验证邮件失败");
