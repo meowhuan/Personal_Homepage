@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 const LINKS_API_BASE = "https://m.ratf.cn/links";
 const APPLY_API_URL = "https://m.ratf.cn/links/apply";
@@ -332,6 +332,15 @@ onMounted(() => {
   fetchLinks();
   loadApplyConfig();
 });
+
+watch(
+  () => [applyConfig.captcha_enabled, applyConfig.captcha_provider, applyConfig.captcha_site_key, isNight.value],
+  async () => {
+    if (!applyConfig.captcha_enabled) return;
+    await nextTick();
+    await renderCaptchaWidget();
+  }
+);
 
 onBeforeUnmount(() => {
   if (themeMedia.value) {
