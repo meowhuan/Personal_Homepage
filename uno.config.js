@@ -1,16 +1,7 @@
-import { defineConfig, presetUno, presetWebFonts } from "unocss";
+import { defineConfig, presetUno } from "unocss";
 
 export default defineConfig({
-  presets: [
-    presetUno(),
-    presetWebFonts({
-      provider: "google",
-      fonts: {
-        body: "M PLUS Rounded 1c",
-        display: "ZCOOL XiaoWei"
-      }
-    })
-  ],
+  presets: [presetUno()],
   theme: {
     colors: {
       meow: {
@@ -33,8 +24,29 @@ export default defineConfig({
       }
     },
     fontFamily: {
-      body: ["M PLUS Rounded 1c", "ui-sans-serif", "system-ui"],
-      display: ["ZCOOL XiaoWei", "ui-serif", "serif"]
+      body: [
+        '"M PLUS Rounded 1c"',
+        '"PingFang SC"',
+        '"Hiragino Sans GB"',
+        '"Noto Sans CJK SC"',
+        '"Microsoft YaHei UI"',
+        '"Microsoft YaHei"',
+        '"Segoe UI"',
+        "ui-sans-serif",
+        "system-ui",
+        "sans-serif"
+      ],
+      display: [
+        '"ZCOOL XiaoWei"',
+        '"LXGW WenKai"',
+        '"STKaiti"',
+        '"KaiTi"',
+        '"Songti SC"',
+        '"Noto Serif CJK SC"',
+        '"Source Han Serif SC"',
+        "ui-serif",
+        "serif"
+      ]
     },
     keyframes: {
       floaty: {
@@ -57,7 +69,18 @@ export default defineConfig({
     {
       getCSS: () => `
         html, body, #app { min-height: 100%; }
-        body { background: #F8F3F8; color: #2B1D2A; }
+        html {
+          -webkit-text-size-adjust: 100%;
+          text-rendering: optimizeLegibility;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          font-synthesis: none;
+        }
+        body {
+          background: #F8F3F8;
+          color: #2B1D2A;
+          font-family: "M PLUS Rounded 1c", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+        }
       `
     }
   ]

@@ -6,6 +6,8 @@
     <title>404 | 找不到页面</title>
     <meta name="description" content="页面走丢了，回到主页看看吧" />
     <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@300;400;600;700&family=ZCOOL+XiaoWei&display=swap"
@@ -27,7 +29,10 @@
           radial-gradient(circle at bottom, #c8f6ed, transparent 60%),
           var(--bg);
         color: var(--ink);
-        font-family: "M PLUS Rounded 1c", system-ui, -apple-system, Segoe UI, sans-serif;
+        font-family: "M PLUS Rounded 1c", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
         display: grid;
         place-items: center;
         padding: 32px;
@@ -41,7 +46,7 @@
         box-shadow: 0 16px 40px rgba(47, 20, 47, 0.12);
       }
       h1 {
-        font-family: "ZCOOL XiaoWei", serif;
+        font-family: "ZCOOL XiaoWei", "LXGW WenKai", "STKaiti", "KaiTi", "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", serif;
         font-size: 48px;
         margin: 0 0 8px;
       }
