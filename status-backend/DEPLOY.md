@@ -164,11 +164,17 @@ sudo systemctl enable --now review-reporter
 - `LINK_TURNSTILE_SECRET` / `LINK_HCAPTCHA_SECRET`（服务端校验 secret）
 - `LINK_APPLY_RATE_LIMIT_WINDOW_SEC=3600`
 - `LINK_APPLY_RATE_LIMIT_MAX=3`
+- `LINK_APPLY_RATE_LIMIT_PREFIX_MAX=8`
+- `LINK_APPLY_RATE_LIMIT_EMAIL_DOMAIN_MAX=6`
+- `LINK_APPLY_RATE_LIMIT_SITE_HOST_MAX=3`
 - `LINK_BLOCK_DISPOSABLE_EMAIL=true`
 - `LINK_BLOCK_EDU_GOV_EMAIL=true`
 - `LINK_APPLY_DENY_HOSTS=aliyun.com,qq.com,baidu.com`（按需扩展）
+- `LINK_VERIFY_WINDOW_HOURS=72`
+- `LINK_PUBLIC_BASE_URL=https://m.ratf.cn`
 
 说明：申请页前端会通过 `GET /links/apply/config` 自动获取 captcha provider 与 site key。
+验证方式说明：`/.well-known/meow-links.txt`、DNS TXT `_meow-links`、首页 meta `name="meow-links"` 或邮箱验证任意一种通过即可进入审核。
 
 第三方 SEO API（`generic` provider）返回 JSON 约定（最小）：
 

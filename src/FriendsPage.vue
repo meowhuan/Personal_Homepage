@@ -4,6 +4,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 const LINKS_API_BASE = "https://m.ratf.cn/links";
 const APPLY_API_URL = "https://m.ratf.cn/links/apply";
 const APPLY_CONFIG_URL = "https://m.ratf.cn/links/apply/config";
+const VERIFY_HTTP_URL = "https://m.ratf.cn/links/verify/http";
+const VERIFY_EMAIL_SEND_URL = "https://m.ratf.cn/links/verify/email/send";
 const CAPTCHA_CONTAINER_ID = "friend-link-captcha";
 
 const isNight = ref(false);
@@ -15,6 +17,14 @@ const submitLoading = ref(false);
 const submitError = ref("");
 const submitSuccess = ref("");
 const copyStatus = ref("");
+const verifyHint = reactive({
+  application_id: null,
+  verify_status: "",
+  message: "",
+  verify_token: "",
+  verify_deadline: 0,
+  actionLoading: false
+});
 const applyConfig = reactive({
   captcha_enabled: false,
   captcha_provider: "",
@@ -132,12 +142,60 @@ const submitApply = async () => {
       throw new Error(data?.message || "提交失败，请稍后再试。");
     }
     submitSuccess.value = data?.message || "申请已提交，感谢喵喵投递。";
+    verifyHint.application_id = Number(data?.application_id || 0) || null;
+    verifyHint.verify_status = String(data?.verify_status || "");
+    verifyHint.message = data?.message || "";
+    verifyHint.verify_token = String(data?.verify_token || "");
+    verifyHint.verify_deadline = Number(data?.verify_deadline || 0) || 0;
     resetForm();
     resetCaptcha();
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : "提交失败，请稍后再试。";
   } finally {
     submitLoading.value = false;
+  }
+};
+
+const triggerHttpVerify = async () => {
+  if (!verifyHint.application_id || verifyHint.actionLoading) return;
+  verifyHint.actionLoading = true;
+  submitError.value = "";
+  try {
+    const res = await fetch(VERIFY_HTTP_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ application_id: verifyHint.application_id })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || "HTTP 验证失败");
+    submitSuccess.value = data?.message || "HTTP 验证成功";
+    verifyHint.message = submitSuccess.value;
+    verifyHint.verify_status = "pending";
+  } catch (err) {
+    submitError.value = err instanceof Error ? err.message : "HTTP 验证失败";
+  } finally {
+    verifyHint.actionLoading = false;
+  }
+};
+
+const sendVerifyEmail = async () => {
+  if (!verifyHint.application_id || verifyHint.actionLoading) return;
+  verifyHint.actionLoading = true;
+  submitError.value = "";
+  try {
+    const res = await fetch(VERIFY_EMAIL_SEND_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ application_id: verifyHint.application_id })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || "发送验证邮件失败");
+    submitSuccess.value = data?.message || "验证邮件已发送";
+    verifyHint.message = submitSuccess.value;
+  } catch (err) {
+    submitError.value = err instanceof Error ? err.message : "发送验证邮件失败";
+  } finally {
+    verifyHint.actionLoading = false;
   }
 };
 
@@ -385,6 +443,17 @@ onBeforeUnmount(() => {
             <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
               请确保站点可访问，内容健康，且已添加本站后再提交申请。
             </p>
+            <div
+              class="mt-3 rounded-2xl border p-3 text-xs leading-relaxed"
+              :class="isNight ? 'border-meow-night-line bg-meow-night-bg/40 text-meow-night-soft' : 'border-meow-line bg-white/60 text-meow-soft'"
+            >
+              <div class="font-700" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">验证声明</div>
+              <div class="mt-1">申请提交后不会立即进入审核，需先完成以下任一验证：</div>
+              <div>1. HTTP 验证：在站点 `/.well-known/meow-links.txt` 写入 token；</div>
+              <div>2. DNS 验证：添加 TXT 记录 `_meow-links`，值包含 token；</div>
+              <div>3. Meta 验证：首页加入 `<meta name="meow-links" content="TOKEN">`；</div>
+              <div>4. 邮箱验证：向申请邮箱发送验证链接并点击确认。</div>
+            </div>
             <form class="mt-4 space-y-3" @submit.prevent="submitApply">
               <input
                 v-model.trim="form.site_name"
@@ -456,6 +525,55 @@ onBeforeUnmount(() => {
                 {{ submitLoading ? "提交中..." : "提交申请" }}
               </button>
             </form>
+            <div
+              v-if="verifyHint.application_id"
+              class="mt-3 rounded-2xl border p-3"
+              :class="isNight ? 'border-meow-night-line bg-meow-night-bg/40' : 'border-meow-line bg-white/60'"
+            >
+              <p class="text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                当前申请编号：#{{ verifyHint.application_id }}（状态：{{ verifyHint.verify_status || "verify_pending" }}）
+              </p>
+              <div v-if="verifyHint.verify_token" class="mt-2 text-xs">
+                <div :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">验证 token：</div>
+                <div class="mt-1 flex flex-wrap items-center gap-2">
+                  <code class="rounded-lg border px-2 py-1 text-[11px]" :class="isNight ? 'border-meow-night-line bg-meow-night-bg' : 'border-meow-line bg-white'">
+                    {{ verifyHint.verify_token }}
+                  </code>
+                  <button type="button" class="meow-btn-ghost" @click="copyText(verifyHint.verify_token)">复制 token</button>
+                </div>
+                <div class="mt-2 space-y-1" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                  <div>HTTP 文件：在 `/.well-known/meow-links.txt` 写入 token（任意位置包含即可）</div>
+                  <div>DNS TXT：添加 `_meow-links` 记录，值包含 token</div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span>Meta：</span>
+                    <code class="rounded-lg border px-2 py-1 text-[11px]" :class="isNight ? 'border-meow-night-line bg-meow-night-bg' : 'border-meow-line bg-white'">
+                      {{ "<meta name=\"meow-links\" content=\"" + verifyHint.verify_token + "\">" }}
+                    </code>
+                  </div>
+                </div>
+              </div>
+              <p v-if="verifyHint.verify_deadline" class="mt-2 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                验证有效期至：{{ new Date(verifyHint.verify_deadline * 1000).toLocaleString("zh-CN") }}
+              </p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="meow-btn-ghost"
+                  :disabled="verifyHint.actionLoading"
+                  @click="triggerHttpVerify"
+                >
+                  {{ verifyHint.actionLoading ? "处理中..." : "我已完成HTTP验证" }}
+                </button>
+                <button
+                  type="button"
+                  class="meow-btn-ghost"
+                  :disabled="verifyHint.actionLoading"
+                  @click="sendVerifyEmail"
+                >
+                  发送邮箱验证链接
+                </button>
+              </div>
+            </div>
             <p v-if="submitError" class="mt-3 text-xs text-[#e45883]">{{ submitError }}</p>
             <p v-if="submitSuccess" class="mt-3 text-xs" :class="isNight ? 'text-meow-night-accent' : 'text-[#2f8f72]'">
               {{ submitSuccess }}

@@ -226,8 +226,28 @@
                 <input id="apply_rate_limit_max" type="number" min="1" max="30" />
               </div>
               <div>
+                <label>网段/IP前缀最大申请次数</label>
+                <input id="apply_rate_limit_prefix_max" type="number" min="1" max="80" />
+              </div>
+              <div>
+                <label>邮箱域最大申请次数</label>
+                <input id="apply_rate_limit_email_domain_max" type="number" min="1" max="60" />
+              </div>
+              <div>
+                <label>站点域最大申请次数</label>
+                <input id="apply_rate_limit_site_host_max" type="number" min="1" max="30" />
+              </div>
+              <div>
                 <label>申请域名黑名单（逗号分隔）</label>
                 <input id="apply_deny_hosts" type="text" placeholder="如：aliyun.com,qq.com,baidu.com" />
+              </div>
+              <div>
+                <label>验证窗口（小时）</label>
+                <input id="verify_window_hours" type="number" min="6" max="240" />
+              </div>
+              <div>
+                <label>公开基址（用于验证邮件链接）</label>
+                <input id="public_base_url" type="text" placeholder="如：https://m.ratf.cn" />
               </div>
               <div class="row-inline small" style="align-items:flex-end;">
                 <label class="row-inline small">
@@ -239,6 +259,9 @@
                   屏蔽 edu/gov 邮箱
                 </label>
               </div>
+            </div>
+            <div class="toolbar">
+              <button id="save-anti-abuse" class="ok">保存风控配置</button>
             </div>
           </div>
 
@@ -301,9 +324,14 @@
           captcha_secret: captchaSecretRaw === "" ? null : (captchaSecretRaw === "-" ? "" : captchaSecretRaw),
           apply_rate_limit_window_sec: Number(document.getElementById("apply_rate_limit_window_sec").value || 0) || null,
           apply_rate_limit_max: Number(document.getElementById("apply_rate_limit_max").value || 0) || null,
+          apply_rate_limit_prefix_max: Number(document.getElementById("apply_rate_limit_prefix_max").value || 0) || null,
+          apply_rate_limit_email_domain_max: Number(document.getElementById("apply_rate_limit_email_domain_max").value || 0) || null,
+          apply_rate_limit_site_host_max: Number(document.getElementById("apply_rate_limit_site_host_max").value || 0) || null,
           block_disposable_email: document.getElementById("block_disposable_email").checked,
           block_edu_gov_email: document.getElementById("block_edu_gov_email").checked,
-          apply_deny_hosts: document.getElementById("apply_deny_hosts").value.trim()
+          apply_deny_hosts: document.getElementById("apply_deny_hosts").value.trim(),
+          verify_window_hours: Number(document.getElementById("verify_window_hours").value || 0) || null,
+          public_base_url: document.getElementById("public_base_url").value.trim()
         };
       };
 
@@ -323,9 +351,14 @@
         document.getElementById("captcha_secret_state").value = cfg.captcha_secret_set ? "已配置" : "未配置";
         document.getElementById("apply_rate_limit_window_sec").value = Number(cfg.apply_rate_limit_window_sec || 3600);
         document.getElementById("apply_rate_limit_max").value = Number(cfg.apply_rate_limit_max || 3);
+        document.getElementById("apply_rate_limit_prefix_max").value = Number(cfg.apply_rate_limit_prefix_max || 8);
+        document.getElementById("apply_rate_limit_email_domain_max").value = Number(cfg.apply_rate_limit_email_domain_max || 6);
+        document.getElementById("apply_rate_limit_site_host_max").value = Number(cfg.apply_rate_limit_site_host_max || 3);
         document.getElementById("block_disposable_email").checked = cfg.block_disposable_email !== false;
         document.getElementById("block_edu_gov_email").checked = cfg.block_edu_gov_email !== false;
         document.getElementById("apply_deny_hosts").value = cfg.apply_deny_hosts || "";
+        document.getElementById("verify_window_hours").value = Number(cfg.verify_window_hours || 72);
+        document.getElementById("public_base_url").value = cfg.public_base_url || "";
       };
 
       const renderApplications = (items = []) => {
@@ -615,6 +648,7 @@
       document.getElementById("load-all").addEventListener("click", loadAll);
       document.getElementById("save-sort").addEventListener("click", saveSort);
       document.getElementById("save-settings").addEventListener("click", saveSettings);
+      document.getElementById("save-anti-abuse").addEventListener("click", saveSettings);
       document.getElementById("test-smtp").addEventListener("click", async () => {
         try {
           await testSmtp();

@@ -17,9 +17,14 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use trust_dns_resolver::{
+    config::{ResolverConfig, ResolverOpts},
+    lookup::TxtLookup,
+    TokioAsyncResolver,
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
@@ -199,6 +204,16 @@ struct LinkApplyPayload {
     captcha_token: Option<String>,
 }
 
+#[derive(Serialize)]
+struct LinkApplyResponse {
+    message: String,
+    application_id: i64,
+    verify_status: String,
+    http_verify_path: String,
+    verify_token: String,
+    verify_deadline: i64,
+}
+
 #[derive(Deserialize)]
 struct CaptchaVerifyResponse {
     success: bool,
@@ -222,8 +237,27 @@ struct LinkApplication {
     ip: Option<String>,
     user_agent: Option<String>,
     review_note: Option<String>,
+    verify_status: Option<String>,
+    verify_deadline: Option<i64>,
+    verify_http_at: Option<i64>,
+    verify_email_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkVerifyHttpPayload {
+    application_id: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkVerifyEmailSendPayload {
+    application_id: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkVerifyEmailQuery {
+    token: String,
 }
 
 #[derive(Deserialize)]
@@ -283,9 +317,14 @@ struct LinkSettingsResponse {
     captcha_secret_set: bool,
     apply_rate_limit_window_sec: i64,
     apply_rate_limit_max: i64,
+    apply_rate_limit_prefix_max: i64,
+    apply_rate_limit_email_domain_max: i64,
+    apply_rate_limit_site_host_max: i64,
     block_disposable_email: bool,
     block_edu_gov_email: bool,
     apply_deny_hosts: Option<String>,
+    verify_window_hours: i64,
+    public_base_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -304,9 +343,14 @@ struct LinkSettingsPayload {
     captcha_secret: Option<String>,
     apply_rate_limit_window_sec: Option<i64>,
     apply_rate_limit_max: Option<i64>,
+    apply_rate_limit_prefix_max: Option<i64>,
+    apply_rate_limit_email_domain_max: Option<i64>,
+    apply_rate_limit_site_host_max: Option<i64>,
     block_disposable_email: Option<bool>,
     block_edu_gov_email: Option<bool>,
     apply_deny_hosts: Option<String>,
+    verify_window_hours: Option<i64>,
+    public_base_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -410,10 +454,15 @@ struct AntiAbuseConfig {
     captcha: Option<CaptchaConfig>,
     apply_rate_limit_window_secs: i64,
     apply_rate_limit_max: i64,
+    apply_rate_limit_prefix_max: i64,
+    apply_rate_limit_email_domain_max: i64,
+    apply_rate_limit_site_host_max: i64,
     disposable_email_block: bool,
     edu_gov_email_block: bool,
     deny_hosts_raw: Option<String>,
     deny_hosts: HashSet<String>,
+    verify_window_secs: i64,
+    public_base_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -526,6 +575,10 @@ async fn main() {
             ip TEXT,
             user_agent TEXT,
             review_note TEXT,
+            verify_token TEXT,
+            verify_deadline INTEGER,
+            verify_http_at INTEGER,
+            verify_email_at INTEGER,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -558,6 +611,22 @@ async fn main() {
     );
     let _ = conn.execute(
         "ALTER TABLE friend_link_applications ADD COLUMN manual_notified INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN verify_token TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN verify_deadline INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN verify_http_at INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN verify_email_at INTEGER",
         [],
     );
     let _ = conn.execute(
@@ -634,6 +703,9 @@ async fn main() {
         .route("/links", get(links_list))
         .route("/links/apply", post(links_apply))
         .route("/links/apply/config", get(links_apply_config))
+        .route("/links/verify/http", post(links_verify_http))
+        .route("/links/verify/email/send", post(links_verify_email_send))
+        .route("/links/verify/email", get(links_verify_email))
         .route("/links/applications", get(links_applications))
         .route("/links/review", post(links_review))
         .route("/links/sort", post(links_sort))
@@ -1312,12 +1384,23 @@ async fn links_apply(
     }
     let note = normalize_optional(payload.note, 280);
     let ip = client_ip(&headers).or_else(|| Some("unknown".to_string()));
+    let ip_prefix = ip
+        .as_deref()
+        .and_then(ip_prefix_key)
+        .unwrap_or_else(|| "unknown".to_string());
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_string());
     let captcha_token = normalize_optional(payload.captcha_token, 4096);
+    let email_domain = email_domain_of(&email).unwrap_or_else(|| "unknown".to_string());
+    let site_host = Url::parse(site_url)
+        .ok()
+        .and_then(|u| u.host_str().map(normalize_host))
+        .unwrap_or_else(|| "unknown".to_string());
     let now = now_ts();
+    let verify_token = generate_verify_token();
+    let verify_deadline = now + anti_abuse.verify_window_secs;
     let application_id: i64;
 
     if let Some(captcha_cfg) = anti_abuse.captcha.as_ref() {
@@ -1364,10 +1447,91 @@ async fn links_apply(
             )
                 .into_response();
         }
+        let prefix_apply_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_link_applications
+                 WHERE created_at >= ?1
+                   AND (
+                     ip = ?2 OR ip LIKE ?3
+                   )",
+                params![
+                    now - anti_abuse.apply_rate_limit_window_secs,
+                    ip_prefix,
+                    format!("{}%", ip_prefix)
+                ],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if prefix_apply_count >= anti_abuse.apply_rate_limit_prefix_max {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiMessage {
+                    message: "当前网络段提交过于频繁，请稍后再试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        let email_domain_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_link_applications
+                 WHERE created_at >= ?1
+                   AND lower(substr(email, instr(email, '@') + 1)) = ?2",
+                params![
+                    now - anti_abuse.apply_rate_limit_window_secs,
+                    email_domain.to_lowercase()
+                ],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if email_domain_count >= anti_abuse.apply_rate_limit_email_domain_max {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiMessage {
+                    message: "该邮箱域名提交过于频繁，请稍后再试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        let site_host_count: i64 = {
+            let mut stmt = match conn.prepare(
+                "SELECT site_url FROM friend_link_applications WHERE created_at >= ?1",
+            ) {
+                Ok(v) => v,
+                Err(_) => {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            let rows = match stmt.query_map(params![now - anti_abuse.apply_rate_limit_window_secs], |row| {
+                row.get::<_, String>(0)
+            }) {
+                Ok(v) => v,
+                Err(_) => {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            rows.filter_map(Result::ok)
+                .filter(|existing_url| {
+                    Url::parse(existing_url)
+                        .ok()
+                        .and_then(|u| u.host_str().map(normalize_host))
+                        .map(|host| host == site_host || host.ends_with(&format!(".{}", site_host)))
+                        .unwrap_or(false)
+                })
+                .count() as i64
+        };
+        if site_host_count >= anti_abuse.apply_rate_limit_site_host_max {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiMessage {
+                    message: "该站点提交过于频繁，请稍后再试".to_string(),
+                }),
+            )
+                .into_response();
+        }
         let pending_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM friend_link_applications
-                 WHERE site_url = ?1 AND status = 'pending'",
+                 WHERE site_url = ?1 AND status IN ('pending','verify_pending')",
                 params![site_url],
                 |row| row.get(0),
             )
@@ -1401,8 +1565,8 @@ async fn links_apply(
         let inserted = conn.execute(
             "INSERT INTO friend_link_applications (
                 site_name, site_url, avatar_url, description, email, note,
-                status, ip, user_agent, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?8, ?9, ?10)",
+                status, ip, user_agent, verify_token, verify_deadline, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'verify_pending', ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 site_name,
                 site_url,
@@ -1412,6 +1576,8 @@ async fn links_apply(
                 note,
                 ip,
                 user_agent,
+                verify_token,
+                verify_deadline,
                 now,
                 now
             ],
@@ -1430,9 +1596,284 @@ async fn links_apply(
 
     (
         StatusCode::CREATED,
-        Json(ApiMessage {
-            message: format!("友链申请已提交，编号 #{}，等待审核", application_id),
+        Json(LinkApplyResponse {
+            message: format!(
+                "友链申请已提交，编号 #{}。请先完成验证（HTTP 或 邮箱 任一项）后进入审核队列。",
+                application_id
+            ),
+            application_id,
+            verify_status: "verify_pending".to_string(),
+            http_verify_path: "/.well-known/meow-links.txt".to_string(),
+            verify_token: verify_token.clone(),
+            verify_deadline,
         }),
+    )
+        .into_response()
+}
+
+async fn links_verify_http(
+    State(state): State<AppState>,
+    Json(payload): Json<LinkVerifyHttpPayload>,
+) -> impl IntoResponse {
+    let anti_abuse = {
+        let conn = state.db.lock().unwrap();
+        resolve_anti_abuse_config(&conn, &state.anti_abuse)
+    };
+    let now = now_ts();
+    let (site_url, verify_token, status, verify_deadline) = {
+        let conn = state.db.lock().unwrap();
+        let row = conn.query_row(
+            "SELECT site_url, verify_token, status, verify_deadline
+             FROM friend_link_applications WHERE id = ?1",
+            params![payload.application_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        );
+        match row {
+            Ok(v) => v,
+            Err(_) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ApiMessage {
+                        message: "申请不存在".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    };
+    if status == "pending" {
+        return (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "该申请已完成验证并进入审核队列".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if status != "verify_pending" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该申请当前不可验证".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if verify_deadline.unwrap_or(0) < now {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "验证已过期，请重新提交申请".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let Some(token) = verify_token else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该申请缺少验证 token，请重新提交".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    let ok = verify_http_token_present(&site_url, &token).await;
+    if !ok {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "未检测到验证 token，请确认已配置：/.well-known/meow-links.txt 或首页 meta 或 DNS TXT".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE friend_link_applications
+             SET verify_http_at = ?1, status = 'pending', updated_at = ?2
+             WHERE id = ?3 AND status = 'verify_pending'",
+            params![now, now, payload.application_id],
+        );
+    }
+    let remain_hours = (anti_abuse.verify_window_secs / 3600).max(1);
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: format!("HTTP 验证通过，已进入审核队列（验证窗口 {}h）", remain_hours),
+        }),
+    )
+        .into_response()
+}
+
+async fn links_verify_email_send(
+    State(state): State<AppState>,
+    Json(payload): Json<LinkVerifyEmailSendPayload>,
+) -> impl IntoResponse {
+    let anti_abuse = {
+        let conn = state.db.lock().unwrap();
+        resolve_anti_abuse_config(&conn, &state.anti_abuse)
+    };
+    let now = now_ts();
+    let (email, status, verify_token, verify_deadline, site_name) = {
+        let conn = state.db.lock().unwrap();
+        let row = conn.query_row(
+            "SELECT email, status, verify_token, verify_deadline, site_name
+             FROM friend_link_applications WHERE id = ?1",
+            params![payload.application_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        );
+        match row {
+            Ok(v) => v,
+            Err(_) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(ApiMessage {
+                        message: "申请不存在".to_string(),
+                    }),
+                )
+                    .into_response()
+            }
+        }
+    };
+    if status == "pending" {
+        return (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "该申请已完成验证并进入审核队列".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if status != "verify_pending" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该申请当前不可发送验证邮件".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if verify_deadline.unwrap_or(0) < now {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "验证已过期，请重新提交申请".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let Some(email) = email else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "申请未填写邮箱，无法发送验证邮件".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    let Some(token) = verify_token else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该申请缺少验证 token，请重新提交".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    let notify_cfg = {
+        let conn = state.db.lock().unwrap();
+        state.notifier.runtime_config(&conn)
+    };
+    let verify_url = anti_abuse
+        .public_base_url
+        .as_deref()
+        .map(|base| format!("{}/links/verify/email?token={}", base.trim_end_matches('/'), token))
+        .unwrap_or_else(|| format!("/links/verify/email?token={}", token));
+    let plain = format!(
+        "站点：{}\n请点击链接完成邮箱验证（完成后进入审核队列）：\n{}\n\n若链接无法点击，可复制 token：{}\n",
+        site_name, verify_url, token
+    );
+    let html = format!(
+        "<p>站点：{}</p><p>请点击以下链接完成邮箱验证（完成后进入审核队列）：</p><p><a href=\"{}\">{}</a></p><p>若无法点击，可复制 token：<code>{}</code></p>",
+        escape_html(&site_name),
+        escape_html(&verify_url),
+        escape_html(&verify_url),
+        escape_html(&token)
+    );
+    match state
+        .notifier
+        .send_smtp_rich(
+            notify_cfg.smtp.as_ref(),
+            "Meow Links 邮箱验证",
+            &plain,
+            Some(&html),
+            Some(vec![email]),
+        )
+        .await
+    {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "验证邮件已发送，请检查收件箱".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: format!("发送失败：{}", err),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn links_verify_email(
+    State(state): State<AppState>,
+    Query(query): Query<LinkVerifyEmailQuery>,
+) -> impl IntoResponse {
+    let token = query.token.trim();
+    if token.is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing token").into_response();
+    }
+    let now = now_ts();
+    let conn = state.db.lock().unwrap();
+    let updated = conn
+        .execute(
+            "UPDATE friend_link_applications
+             SET verify_email_at = ?1, status = 'pending', updated_at = ?2
+             WHERE verify_token = ?3
+               AND status = 'verify_pending'
+               AND (verify_deadline IS NULL OR verify_deadline >= ?4)",
+            params![now, now, token, now],
+        )
+        .unwrap_or(0);
+    if updated == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "<!doctype html><html><body style=\"font-family:sans-serif;padding:24px;\">验证失败：token 无效或已过期。</body></html>",
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        "<!doctype html><html><body style=\"font-family:sans-serif;padding:24px;\">邮箱验证成功，申请已进入审核队列。</body></html>",
     )
         .into_response()
 }
@@ -1447,14 +1888,15 @@ async fn links_applications(
     let conn = state.db.lock().unwrap();
     let mut stmt = match conn.prepare(
         "SELECT id, site_name, site_url, avatar_url, description, email, note, status,
-                ip, user_agent, review_note, created_at, updated_at
+                ip, user_agent, review_note, verify_token, verify_deadline, verify_http_at, verify_email_at, created_at, updated_at
          FROM friend_link_applications
-         ORDER BY status = 'pending' DESC, created_at DESC",
+         ORDER BY status IN ('pending','verify_pending') DESC, created_at DESC",
     ) {
         Ok(stmt) => stmt,
         Err(_) => return (StatusCode::OK, Json(Vec::<LinkApplication>::new())).into_response(),
     };
     let rows = match stmt.query_map([], |row| {
+        let status: String = row.get(7)?;
         Ok(LinkApplication {
             id: row.get(0)?,
             site_name: row.get(1)?,
@@ -1463,12 +1905,20 @@ async fn links_applications(
             description: row.get(4)?,
             email: row.get(5)?,
             note: row.get(6)?,
-            status: row.get(7)?,
+            status: status.clone(),
             ip: row.get(8)?,
             user_agent: row.get(9)?,
             review_note: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
+            verify_status: if status == "verify_pending" {
+                Some(status)
+            } else {
+                None
+            },
+            verify_deadline: row.get(12)?,
+            verify_http_at: row.get(13)?,
+            verify_email_at: row.get(14)?,
+            created_at: row.get(15)?,
+            updated_at: row.get(16)?,
         })
     }) {
         Ok(rows) => rows,
@@ -2303,6 +2753,24 @@ async fn links_settings_set(
                 .map(|v| v.clamp(1, 30).to_string()),
         ),
         (
+            "apply_rate_limit_prefix_max",
+            payload
+                .apply_rate_limit_prefix_max
+                .map(|v| v.clamp(1, 80).to_string()),
+        ),
+        (
+            "apply_rate_limit_email_domain_max",
+            payload
+                .apply_rate_limit_email_domain_max
+                .map(|v| v.clamp(1, 60).to_string()),
+        ),
+        (
+            "apply_rate_limit_site_host_max",
+            payload
+                .apply_rate_limit_site_host_max
+                .map(|v| v.clamp(1, 30).to_string()),
+        ),
+        (
             "block_disposable_email",
             payload
                 .block_disposable_email
@@ -2319,6 +2787,18 @@ async fn links_settings_set(
             payload
                 .apply_deny_hosts
                 .map(|v| v.trim().chars().take(1024).collect::<String>()),
+        ),
+        (
+            "verify_window_hours",
+            payload
+                .verify_window_hours
+                .map(|v| v.clamp(6, 240).to_string()),
+        ),
+        (
+            "public_base_url",
+            payload
+                .public_base_url
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
         ),
     ];
     for (key, value) in updates {
@@ -2931,6 +3411,22 @@ impl AntiAbuseConfig {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(3)
             .clamp(1, 30);
+        let apply_rate_limit_prefix_max = std::env::var("LINK_APPLY_RATE_LIMIT_PREFIX_MAX")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(8)
+            .clamp(1, 80);
+        let apply_rate_limit_email_domain_max =
+            std::env::var("LINK_APPLY_RATE_LIMIT_EMAIL_DOMAIN_MAX")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(6)
+                .clamp(1, 60);
+        let apply_rate_limit_site_host_max = std::env::var("LINK_APPLY_RATE_LIMIT_SITE_HOST_MAX")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(3)
+            .clamp(1, 30);
         let disposable_email_block = std::env::var("LINK_BLOCK_DISPOSABLE_EMAIL")
             .ok()
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
@@ -2941,15 +3437,27 @@ impl AntiAbuseConfig {
             .unwrap_or(true);
         let deny_hosts_raw = normalize_env("LINK_APPLY_DENY_HOSTS");
         let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
+        let verify_window_secs = std::env::var("LINK_VERIFY_WINDOW_HOURS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(72)
+            .clamp(6, 240)
+            * 3600;
+        let public_base_url = normalize_env("LINK_PUBLIC_BASE_URL");
 
         Self {
             captcha,
             apply_rate_limit_window_secs,
             apply_rate_limit_max,
+            apply_rate_limit_prefix_max,
+            apply_rate_limit_email_domain_max,
+            apply_rate_limit_site_host_max,
             disposable_email_block,
             edu_gov_email_block,
             deny_hosts_raw,
             deny_hosts,
+            verify_window_secs,
+            public_base_url,
         }
     }
 }
@@ -3025,15 +3533,41 @@ fn default_deny_hosts() -> HashSet<String> {
         "alibaba.com",
         "taobao.com",
         "tmall.com",
+        "amazon.cn",
+        "amazon.com",
+        "tencentcloud.com",
+        "jd.com",
+        "douyin.com",
+        "tiktok.com",
+        "weibo.com",
+        "bilibili.com",
+        "zhihu.com",
         "qq.com",
         "wechat.com",
         "weixin.qq.com",
+        "163.com",
+        "sohu.com",
+        "sina.com",
         "baidu.com",
+        "google.cn",
         "google.com",
+        "youtube.com",
+        "facebook.com",
+        "x.com",
+        "twitter.com",
+        "instagram.com",
+        "reddit.com",
+        "wikipedia.org",
         "microsoft.com",
         "apple.com",
         "amazon.com",
+        "aws.amazon.com",
+        "cloud.tencent.com",
         "cloudflare.com",
+        "openai.com",
+        "bit.ly",
+        "t.co",
+        "tinyurl.com",
     ] {
         out.insert(host.to_string());
     }
@@ -3065,6 +3599,18 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(defaults.apply_rate_limit_max)
         .clamp(1, 30);
+    let apply_rate_limit_prefix_max = read_setting(conn, "apply_rate_limit_prefix_max")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.apply_rate_limit_prefix_max)
+        .clamp(1, 80);
+    let apply_rate_limit_email_domain_max = read_setting(conn, "apply_rate_limit_email_domain_max")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.apply_rate_limit_email_domain_max)
+        .clamp(1, 60);
+    let apply_rate_limit_site_host_max = read_setting(conn, "apply_rate_limit_site_host_max")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.apply_rate_limit_site_host_max)
+        .clamp(1, 30);
     let disposable_email_block = read_setting(conn, "block_disposable_email")
         .map(|v| v != "0" && v.to_lowercase() != "false")
         .unwrap_or(defaults.disposable_email_block);
@@ -3073,16 +3619,113 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
         .unwrap_or(defaults.edu_gov_email_block);
     let deny_hosts_raw = read_setting(conn, "apply_deny_hosts").or_else(|| defaults.deny_hosts_raw.clone());
     let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
+    let verify_window_secs = read_setting(conn, "verify_window_hours")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|h| h.clamp(6, 240) * 3600)
+        .unwrap_or(defaults.verify_window_secs);
+    let public_base_url = read_setting(conn, "public_base_url").or_else(|| defaults.public_base_url.clone());
 
     AntiAbuseConfig {
         captcha,
         apply_rate_limit_window_secs,
         apply_rate_limit_max,
+        apply_rate_limit_prefix_max,
+        apply_rate_limit_email_domain_max,
+        apply_rate_limit_site_host_max,
         disposable_email_block,
         edu_gov_email_block,
         deny_hosts_raw,
         deny_hosts,
+        verify_window_secs,
+        public_base_url,
     }
+}
+
+async fn verify_http_token_present(site_url: &str, token: &str) -> bool {
+    let base = match Url::parse(site_url) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+    {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if let Ok(path_url) = base.join("/.well-known/meow-links.txt") {
+        if let Ok(resp) = client
+            .get(path_url.as_str())
+            .header("user-agent", "MeowVerifyWorker/1.0")
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.text().await {
+                    if body.contains(token) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(resp) = client
+        .get(base.as_str())
+        .header("user-agent", "MeowVerifyWorker/1.0")
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            if let Ok(body) = resp.text().await {
+                let lower = body.to_lowercase();
+                if (lower.contains("name=\"meow-links\"")
+                    || lower.contains("name='meow-links'")
+                    || lower.contains("name=\"meow-links-token\"")
+                    || lower.contains("name='meow-links-token'"))
+                    && body.contains(token)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    verify_dns_txt_token(&base, token).await
+}
+
+async fn verify_dns_txt_token(base: &Url, token: &str) -> bool {
+    let host = match base.host_str() {
+        Some(v) => v,
+        None => return false,
+    };
+    let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+    let name = format!("_meow-links.{}", host.trim_end_matches('.'));
+    let lookup: TxtLookup =
+        match tokio::time::timeout(Duration::from_secs(4), resolver.txt_lookup(name)).await {
+            Ok(Ok(v)) => v,
+            _ => return false,
+        };
+    for txt in lookup.iter() {
+        for data in txt.txt_data() {
+            if let Ok(text) = std::str::from_utf8(data) {
+                if text.contains(token) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn generate_verify_token() -> String {
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id() as u128;
+    let mix = now_nanos ^ (pid << 32) ^ ((now_nanos.rotate_left(17)) & 0xffff_ffff_ffff);
+    format!("mv-{:032x}", mix)
 }
 
 fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSettingsResponse {
@@ -3117,18 +3760,51 @@ fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSett
         captcha_secret_set,
         apply_rate_limit_window_sec: anti.apply_rate_limit_window_secs,
         apply_rate_limit_max: anti.apply_rate_limit_max,
+        apply_rate_limit_prefix_max: anti.apply_rate_limit_prefix_max,
+        apply_rate_limit_email_domain_max: anti.apply_rate_limit_email_domain_max,
+        apply_rate_limit_site_host_max: anti.apply_rate_limit_site_host_max,
         block_disposable_email: anti.disposable_email_block,
         block_edu_gov_email: anti.edu_gov_email_block,
         apply_deny_hosts: anti.deny_hosts_raw.clone(),
+        verify_window_hours: (anti.verify_window_secs / 3600).max(1),
+        public_base_url: anti.public_base_url.clone(),
     }
 }
 
 fn is_disallowed_link_host(site_url: &str, anti_abuse: &AntiAbuseConfig) -> bool {
-    let host = Url::parse(site_url)
-        .ok()
+    let parsed = Url::parse(site_url).ok();
+    let host = parsed
+        .as_ref()
         .and_then(|u| u.host_str().map(normalize_host))
         .unwrap_or_default();
     if host.is_empty() {
+        return true;
+    }
+    if host.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    if host.ends_with(".gov")
+        || host.ends_with(".gov.cn")
+        || host.ends_with(".edu")
+        || host.ends_with(".edu.cn")
+        || host.ends_with(".mil")
+    {
+        return true;
+    }
+    let unreasonable_keywords = [
+        "google",
+        "microsoft",
+        "apple",
+        "amazon",
+        "alibaba",
+        "aliyun",
+        "cloudflare",
+        "baidu",
+        "tencent",
+        "wechat",
+        "weixin",
+    ];
+    if unreasonable_keywords.iter().any(|k| host.contains(k)) {
         return true;
     }
     anti_abuse
@@ -3195,6 +3871,57 @@ fn is_edu_or_gov_email_domain(email: &str) -> bool {
         || domain == "gov"
         || domain.ends_with(".gov")
         || domain.ends_with(".gov.cn")
+}
+
+fn email_domain_of(email: &str) -> Option<String> {
+    email
+        .rsplit('@')
+        .next()
+        .map(normalize_host)
+        .filter(|v| !v.is_empty())
+}
+
+fn parse_public_ip(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    let parsed = value.parse::<IpAddr>().ok()?;
+    if !is_public_ip(&parsed) {
+        return None;
+    }
+    Some(parsed.to_string())
+}
+
+fn is_public_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified())
+        }
+        IpAddr::V6(v6) => {
+            !(v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80)
+        }
+    }
+}
+
+fn ip_prefix_key(ip: &str) -> Option<String> {
+    let parsed = ip.parse::<IpAddr>().ok()?;
+    match parsed {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            Some(format!("{}.{}.{}.", o[0], o[1], o[2]))
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            Some(format!("{:x}:{:x}:{:x}:{:x}:", s[0], s[1], s[2], s[3]))
+        }
+    }
 }
 
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
@@ -3267,21 +3994,30 @@ fn is_valid_http_url(value: &str) -> bool {
 }
 
 fn client_ip(headers: &HeaderMap) -> Option<String> {
-    if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        let ip = value
-            .split(',')
-            .next()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
-        if ip.is_some() {
-            return ip;
+    if let Some(value) = headers
+        .get("cf-connecting-ip")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(ip) = parse_public_ip(value) {
+            return Some(ip);
         }
     }
-    headers
-        .get("x-real-ip")
+    if let Some(value) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        if let Some(ip) = parse_public_ip(value) {
+            return Some(ip);
+        }
+    }
+    if let Some(value) = headers
+        .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+    {
+        for segment in value.split(',') {
+            if let Some(ip) = parse_public_ip(segment) {
+                return Some(ip);
+            }
+        }
+    }
+    None
 }
 
 fn read_setting(conn: &Connection, key: &str) -> Option<String> {

@@ -41,9 +41,14 @@ cargo run
 - `LINK_HCAPTCHA_SECRET` (required if `LINK_CAPTCHA_PROVIDER=hcaptcha`)
 - `LINK_APPLY_RATE_LIMIT_WINDOW_SEC` (optional, default `3600`)
 - `LINK_APPLY_RATE_LIMIT_MAX` (optional, default `3`, max applies per IP within window)
+- `LINK_APPLY_RATE_LIMIT_PREFIX_MAX` (optional, default `8`, max applies per IP prefix within window)
+- `LINK_APPLY_RATE_LIMIT_EMAIL_DOMAIN_MAX` (optional, default `6`, max applies per email domain within window)
+- `LINK_APPLY_RATE_LIMIT_SITE_HOST_MAX` (optional, default `3`, max applies per site host within window)
 - `LINK_BLOCK_DISPOSABLE_EMAIL` (optional, default `true`)
 - `LINK_BLOCK_EDU_GOV_EMAIL` (optional, default `true`)
 - `LINK_APPLY_DENY_HOSTS` (optional, additional blocked host list; separated by comma/semicolon)
+- `LINK_VERIFY_WINDOW_HOURS` (optional, default `72`, verification window before review)
+- `LINK_PUBLIC_BASE_URL` (optional, used for email verification link base url)
 
 `.env` 示例 / Example:
 
@@ -70,6 +75,9 @@ STATUS_TOKEN=your_token
 - `GET /links` (公开友链列表)
 - `POST /links/apply` (友链申请，无需 token，支持 TG/SMTP 通知)
 - `GET /links/apply/config` (公开申请配置，返回 captcha provider/site key)
+- `POST /links/verify/http` (公开验证接口：检测 `/.well-known/meow-links.txt` token)
+- `POST /links/verify/email/send` (公开验证接口：发送邮箱验证链接)
+- `GET /links/verify/email?token=...` (公开验证接口：点击后进入审核队列)
 - `GET /links/applications` (需要 token，申请列表)
 - `POST /links/review` (需要 token，审核通过/拒绝)
 - `POST /links/sort` (需要 token，更新已收录友链排序)
@@ -85,7 +93,11 @@ STATUS_TOKEN=your_token
 - `GET /links/admin` (友链管理页面)
 
 说明：若申请记录包含 `email` 且 SMTP 已配置，`/links/review` 完成后会自动给申请者邮箱发送审核结果通知。
-`/links/apply` 风控：支持 captcha（Turnstile/hCaptcha）、按 IP 限流、一次性邮箱拦截、`edu/gov` 邮箱拦截、站点域名黑名单拦截。
+`/links/apply` 风控：支持 captcha（Turnstile/hCaptcha）、按 IP 与网段/IP前缀限流、按邮箱域与站点域限流、一次性邮箱拦截、`edu/gov` 邮箱拦截、站点域名黑名单拦截。申请提交后默认状态为 `verify_pending`，完成以下任一验证后才进入 `pending` 审核队列：
+- HTTP 文件：`/.well-known/meow-links.txt` 内容包含 token
+- DNS TXT：`_meow-links.<domain>` 记录包含 token
+- 首页 meta：`<meta name="meow-links" content="TOKEN">`
+- 邮箱验证：点击验证邮件链接
 审查拆分：公网后端不再主动抓取外站（避免暴露公网服务器 IP）。请将审查任务部署在内网服务，由内网服务调用 `.../review/report/...` 接口将审核/下架结果上报回公网后端。
 内网审查服务（`review-reporter`）的发行版部署与 systemd 常驻配置见 `status-backend/DEPLOY.md`。
 排障可使用单次模式：`review-reporter --once` 或设置 `REVIEW_RUN_ONCE=1`。
