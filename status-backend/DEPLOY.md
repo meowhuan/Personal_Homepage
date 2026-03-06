@@ -87,6 +87,13 @@ REVIEW_REPORT_TOKEN="your_report_token" \
 ./target/release/review-reporter
 ```
 
+若需要审查 JavaScript 动态加载页面，先安装 Node.js 与 Playwright（一次性）：
+
+```bash
+cd /opt/status-backend
+npm install playwright
+```
+
 ### 6.3 systemd（Linux）/ systemd service
 
 创建 `/etc/systemd/system/review-reporter.service`：
@@ -105,6 +112,10 @@ Environment=REVIEW_API_BASE=https://your-public-api.example.com
 Environment=REVIEW_REPORT_TOKEN=your_report_token
 Environment=REVIEW_LOOP_INTERVAL_SEC=300
 Environment=REVIEW_LOCAL_STATE=/opt/status-backend/review-worker-state.json
+# Optional: Playwright JS rendering fallback
+# Environment=REVIEW_JS_RENDER=1
+# Environment=REVIEW_JS_RENDER_SCRIPT=/opt/status-backend/scripts/playwright-fetch.mjs
+# Environment=REVIEW_JS_RENDER_MAX_PAGES=2
 
 [Install]
 WantedBy=multi-user.target
@@ -124,6 +135,13 @@ sudo systemctl enable --now review-reporter
 - `REVIEW_RUN_ONCE` (optional, `1/true` to run single cycle then exit, useful for debugging)
 - `REVIEW_SEO_PROVIDER` (optional: `none`/`generic`/`serpapi`, default `none`)
 - `REVIEW_SEO_MAX_BONUS` (optional, default `12`, range `1~30`)
+- `REVIEW_JS_RENDER` (optional, `1/true` to enable Playwright rendering fallback for backlink detection)
+- `REVIEW_JS_RENDER_CMD` (optional, default `node`)
+- `REVIEW_JS_RENDER_SCRIPT` (optional, default `scripts/playwright-fetch.mjs`)
+- `REVIEW_JS_RENDER_TIMEOUT_SEC` (optional, default `18`, range `5~60`)
+- `REVIEW_JS_RENDER_WAIT_UNTIL` (optional, `load`/`domcontentloaded`/`networkidle`, default `networkidle`)
+- `REVIEW_JS_RENDER_WAIT_AFTER_MS` (optional, default `800`, range `0~5000`)
+- `REVIEW_JS_RENDER_MAX_PAGES` (optional, max JS-render pages per backlink scan, default `2`, range `1~8`)
 
 当 `REVIEW_SEO_PROVIDER=generic` 时：
 - `REVIEW_SEO_API_URL` (required)

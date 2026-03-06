@@ -115,8 +115,18 @@ STATUS_TOKEN=your_token
 
 - 回链检查（默认 24h，`LINK_BACKLINK_ENFORCE_HOURS`）：
   - 若到期仍未检测到本站链接，自动下架（`removed_no_backlink`）
+  - 默认使用 HTTP 源码抓取；可选开启 Playwright 渲染抓取（用于 JavaScript 动态页面）
 - 可访问性检查（默认 72h，由内网 worker 侧 `unreachable` 逻辑控制）：
   - 连续不可访问达到阈值后自动下架（`removed_unreachable`）
+
+Playwright 渲染抓取可选环境变量（`review-reporter`）：
+- `REVIEW_JS_RENDER`（`1/true` 启用，默认关闭）
+- `REVIEW_JS_RENDER_CMD`（默认 `node`）
+- `REVIEW_JS_RENDER_SCRIPT`（默认 `scripts/playwright-fetch.mjs`）
+- `REVIEW_JS_RENDER_TIMEOUT_SEC`（默认 `18`，范围 `5~60`）
+- `REVIEW_JS_RENDER_WAIT_UNTIL`（`load`/`domcontentloaded`/`networkidle`，默认 `networkidle`）
+- `REVIEW_JS_RENDER_WAIT_AFTER_MS`（默认 `800`，范围 `0~5000`）
+- `REVIEW_JS_RENDER_MAX_PAGES`（每次回链检测最多渲染页数，默认 `2`，范围 `1~8`）
 
 ### 3) 邮件通知触发
 

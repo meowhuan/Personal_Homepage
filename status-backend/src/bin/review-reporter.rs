@@ -5,6 +5,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
+    process::Stdio,
     time::Duration,
 };
 
@@ -67,8 +68,19 @@ enum SeoProviderConfig {
 }
 
 #[derive(Clone)]
+struct JsRenderConfig {
+    command: String,
+    script_path: String,
+    timeout_secs: u64,
+    wait_until: String,
+    wait_after_ms: u64,
+    max_pages: usize,
+}
+
+#[derive(Clone)]
 struct WorkerConfig {
     seo_provider: Option<SeoProviderConfig>,
+    js_render: Option<JsRenderConfig>,
 }
 
 #[tokio::main]
@@ -96,10 +108,11 @@ async fn main() {
         .build()
         .expect("build client");
     eprintln!(
-        "[review-worker] started: api_base={} interval_sec={} seo_provider={} run_once={}",
+        "[review-worker] started: api_base={} interval_sec={} seo_provider={} js_render={} run_once={}",
         base,
         interval_secs,
         worker_config.provider_label(),
+        worker_config.js_render_label(),
         run_once
     );
 
@@ -221,6 +234,7 @@ async fn run_once_cycle(
             &link.url,
             &tasks.backlink_target,
             snap.as_ref().map(|(_, html)| html.as_str()),
+            worker_config,
         )
         .await;
 
@@ -351,7 +365,14 @@ async fn evaluate_application(
         let has_backlink = if contains_backlink(&lower, backlink_target) {
             true
         } else {
-            find_backlink_in_site(client, &app.site_url, backlink_target, Some(&html)).await
+            find_backlink_in_site(
+                client,
+                &app.site_url,
+                backlink_target,
+                Some(&html),
+                worker_config,
+            )
+            .await
         };
         if has_backlink {
             score += 10;
@@ -594,11 +615,17 @@ async fn find_backlink_in_site(
     site_url: &str,
     backlink_target: &str,
     homepage_html: Option<&str>,
+    worker_config: &WorkerConfig,
 ) -> bool {
     let base = match Url::parse(site_url) {
         Ok(v) => v,
         Err(_) => return false,
     };
+    let mut js_render_budget = worker_config
+        .js_render
+        .as_ref()
+        .map(|cfg| cfg.max_pages)
+        .unwrap_or(0);
     let home_html_owned = if let Some(html) = homepage_html {
         html.to_string()
     } else {
@@ -615,6 +642,25 @@ async fn find_backlink_in_site(
     let mut candidates = collect_friend_page_candidates(&base, &home_html_owned);
     let mut dynamic_candidates = collect_dynamic_page_candidates(&base, &home_html_owned);
     candidates.append(&mut dynamic_candidates);
+
+    if js_render_budget > 0 {
+        if let Some(cfg) = &worker_config.js_render {
+            if let Some(rendered_html) = render_site_with_playwright(cfg, site_url).await {
+                js_render_budget = js_render_budget.saturating_sub(1);
+                let rendered_lower = rendered_html.to_lowercase();
+                if contains_backlink(&rendered_lower, backlink_target) {
+                    return true;
+                }
+                let mut rendered_candidates =
+                    collect_friend_page_candidates(&base, &rendered_html);
+                let mut rendered_dynamic =
+                    collect_dynamic_page_candidates(&base, &rendered_html);
+                rendered_candidates.append(&mut rendered_dynamic);
+                candidates.splice(0..0, rendered_candidates);
+            }
+        }
+    }
+
     if let Some(mut sitemap_urls) = load_sitemap_candidates(client, &base).await {
         candidates.append(&mut sitemap_urls);
     }
@@ -630,12 +676,58 @@ async fn find_backlink_in_site(
         }
         if let Some((_, html)) = fetch_site(client, &url).await {
             checked += 1;
-            if contains_backlink(&html.to_lowercase(), backlink_target) {
+            let lower = html.to_lowercase();
+            if contains_backlink(&lower, backlink_target) {
                 return true;
+            }
+            if js_render_budget > 0 {
+                if let Some(cfg) = &worker_config.js_render {
+                    if let Some(rendered_html) = render_site_with_playwright(cfg, &url).await {
+                        js_render_budget = js_render_budget.saturating_sub(1);
+                        if contains_backlink(&rendered_html.to_lowercase(), backlink_target) {
+                            return true;
+                        }
+                    }
+                }
             }
         }
     }
     false
+}
+
+async fn render_site_with_playwright(config: &JsRenderConfig, target_url: &str) -> Option<String> {
+    let mut cmd = tokio::process::Command::new(&config.command);
+    cmd.arg(&config.script_path)
+        .arg("--url")
+        .arg(target_url)
+        .arg("--wait-until")
+        .arg(&config.wait_until)
+        .arg("--wait-after-ms")
+        .arg(config.wait_after_ms.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let output = tokio::time::timeout(Duration::from_secs(config.timeout_secs), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "[review-worker] playwright fetch failed: url={} status={} err={}",
+            target_url,
+            output.status,
+            stderr.trim()
+        );
+        return None;
+    }
+    let html = String::from_utf8_lossy(&output.stdout).to_string();
+    let trimmed = html.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 fn collect_friend_page_candidates(base: &Url, html: &str) -> Vec<String> {
@@ -1043,7 +1135,48 @@ impl WorkerConfig {
                 }),
             _ => None,
         };
-        Self { seo_provider }
+        let js_render = std::env::var("REVIEW_JS_RENDER")
+            .ok()
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "True"))
+            .unwrap_or(false)
+            .then(|| JsRenderConfig {
+                command: std::env::var("REVIEW_JS_RENDER_CMD")
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "node".to_string()),
+                script_path: std::env::var("REVIEW_JS_RENDER_SCRIPT")
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "scripts/playwright-fetch.mjs".to_string()),
+                timeout_secs: std::env::var("REVIEW_JS_RENDER_TIMEOUT_SEC")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(18)
+                    .clamp(5, 60),
+                wait_until: std::env::var("REVIEW_JS_RENDER_WAIT_UNTIL")
+                    .ok()
+                    .map(|v| v.trim().to_lowercase())
+                    .filter(|v| {
+                        matches!(v.as_str(), "load" | "domcontentloaded" | "networkidle")
+                    })
+                    .unwrap_or_else(|| "networkidle".to_string()),
+                wait_after_ms: std::env::var("REVIEW_JS_RENDER_WAIT_AFTER_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(800)
+                    .clamp(0, 5000),
+                max_pages: std::env::var("REVIEW_JS_RENDER_MAX_PAGES")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(2)
+                    .clamp(1, 8),
+            });
+        Self {
+            seo_provider,
+            js_render,
+        }
     }
 
     fn provider_label(&self) -> &'static str {
@@ -1051,6 +1184,14 @@ impl WorkerConfig {
             Some(SeoProviderConfig::Generic(_)) => "generic",
             Some(SeoProviderConfig::SerpApi(_)) => "serpapi",
             None => "none",
+        }
+    }
+
+    fn js_render_label(&self) -> &'static str {
+        if self.js_render.is_some() {
+            "enabled"
+        } else {
+            "disabled"
         }
     }
 }
