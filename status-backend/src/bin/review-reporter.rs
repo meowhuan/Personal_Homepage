@@ -310,7 +310,7 @@ async fn evaluate_application(
     let mut score = 50;
     let mut reasons: Vec<String> = Vec::new();
     let mut force_pending = false;
-    let mut force_reject_reason: Option<String> = None;
+    let force_reject_reason: Option<String> = None;
 
     if looks_suspicious_domain(&app.site_url) {
         score -= 40;
@@ -1018,67 +1018,6 @@ fn extract_html_title(html: &str) -> Option<String> {
     } else {
         Some(raw.to_string())
     }
-}
-
-fn title_name_similarity(site_name: &str, title: &str) -> f32 {
-    let a = normalize_similarity_text(site_name);
-    let b = normalize_similarity_text(title);
-    if a.is_empty() || b.is_empty() {
-        return 0.0;
-    }
-    if a == b || a.contains(&b) || b.contains(&a) {
-        return 1.0;
-    }
-    dice_coefficient_bigrams(&a, &b)
-}
-
-fn normalize_similarity_text(raw: &str) -> String {
-    raw.chars()
-        .flat_map(|c| c.to_lowercase())
-        .filter(|c| c.is_ascii_alphanumeric() || is_cjk_char(*c))
-        .collect::<String>()
-}
-
-fn is_cjk_char(c: char) -> bool {
-    let code = c as u32;
-    (0x4E00..=0x9FFF).contains(&code)
-        || (0x3400..=0x4DBF).contains(&code)
-        || (0xF900..=0xFAFF).contains(&code)
-}
-
-fn dice_coefficient_bigrams(a: &str, b: &str) -> f32 {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    if a_chars.len() < 2 || b_chars.len() < 2 {
-        return if a == b { 1.0 } else { 0.0 };
-    }
-    let a_pairs = char_bigrams(&a_chars);
-    let b_pairs = char_bigrams(&b_chars);
-    if a_pairs.is_empty() || b_pairs.is_empty() {
-        return 0.0;
-    }
-    let mut b_count = HashMap::new();
-    for pair in b_pairs {
-        *b_count.entry(pair).or_insert(0usize) += 1;
-    }
-    let mut intersect = 0usize;
-    for pair in a_pairs {
-        if let Some(count) = b_count.get_mut(&pair) {
-            if *count > 0 {
-                *count -= 1;
-                intersect += 1;
-            }
-        }
-    }
-    (2.0 * intersect as f32) / ((a_chars.len() - 1 + b_chars.len() - 1) as f32)
-}
-
-fn char_bigrams(chars: &[char]) -> Vec<(char, char)> {
-    let mut out = Vec::with_capacity(chars.len().saturating_sub(1));
-    for i in 0..chars.len().saturating_sub(1) {
-        out.push((chars[i], chars[i + 1]));
-    }
-    out
 }
 
 fn contains_spam_keyword(content: &str) -> bool {
