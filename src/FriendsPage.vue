@@ -190,25 +190,37 @@ const sendVerifyEmail = async () => {
   if (!verifyHint.application_id || verifyHint.actionLoading) return;
   verifyHint.actionLoading = true;
   submitError.value = "";
+  const captchaToken = getCaptchaToken();
+  if (applyConfig.captcha_enabled && !captchaToken) {
+    submitError.value = "请先完成人机验证。";
+    verifyHint.actionLoading = false;
+    openModal("发送失败", submitError.value);
+    return;
+  }
   try {
     const res = await fetch(VERIFY_EMAIL_SEND_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         application_id: verifyHint.application_id,
-        verify_token: verifyHint.verify_token || ""
+        verify_token: verifyHint.verify_token || "",
+        captcha_token: captchaToken || undefined
       })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.message || "发送验证邮件失败");
     submitSuccess.value = data?.message || "验证邮件已发送";
     verifyHint.message = submitSuccess.value;
+    if (data?.verify_token) {
+      verifyHint.verify_token = String(data.verify_token);
+    }
     openModal("邮件已发送", submitSuccess.value);
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : "发送验证邮件失败";
     openModal("发送失败", submitError.value);
   } finally {
     verifyHint.actionLoading = false;
+    resetCaptcha();
   }
 };
 

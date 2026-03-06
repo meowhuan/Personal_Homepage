@@ -254,6 +254,7 @@ struct LinkVerifyHttpPayload {
 struct LinkVerifyEmailSendPayload {
     application_id: i64,
     verify_token: String,
+    captcha_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -362,6 +363,12 @@ struct LinkApplyConfigResponse {
     captcha_secret_set: Option<bool>,
 }
 
+#[derive(Serialize)]
+struct VerifyEmailSendResponse {
+    message: String,
+    verify_token: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct SmtpTestPayload {
     recipient: Option<String>,
@@ -467,6 +474,8 @@ struct AntiAbuseConfig {
     public_base_url: Option<String>,
     verify_email_rate_limit_window_secs: i64,
     verify_email_rate_limit_max: i64,
+    verify_email_rate_limit_app_max: i64,
+    verify_email_cooldown_secs: i64,
 }
 
 #[derive(Clone)]
@@ -1818,6 +1827,28 @@ async fn links_verify_email_send(
     }
     let ip = client_ip(&headers).or_else(|| Some("unknown".to_string()));
     let ip_value = ip.as_deref().unwrap_or("unknown");
+    if let Some(captcha_cfg) = anti_abuse.captcha.as_ref() {
+        let captcha_token = normalize_optional(payload.captcha_token, 4096);
+        let Some(captcha_token) = captcha_token.as_deref() else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    message: "请先完成人机验证".to_string(),
+                }),
+            )
+                .into_response();
+        };
+        let verified = verify_captcha(captcha_cfg, captcha_token, ip.as_deref()).await;
+        if !verified {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    message: "人机验证失败，请重试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
     {
         let conn = state.db.lock().unwrap();
         let recent_count: i64 = conn
@@ -1840,11 +1871,66 @@ async fn links_verify_email_send(
             )
                 .into_response();
         }
-        let _ = conn.execute(
-            "INSERT INTO friend_link_verify_email_log (application_id, ip, created_at)
-             VALUES (?1, ?2, ?3)",
-            params![payload.application_id, ip_value, now],
-        );
+        let app_recent_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_link_verify_email_log
+                 WHERE application_id = ?1 AND created_at >= ?2",
+                params![
+                    payload.application_id,
+                    now - anti_abuse.verify_email_rate_limit_window_secs
+                ],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if app_recent_count >= anti_abuse.verify_email_rate_limit_app_max {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiMessage {
+                    message: "该申请发送次数已达上限，请稍后再试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        let last_sent: Option<i64> = conn
+            .query_row(
+                "SELECT MAX(created_at) FROM friend_link_verify_email_log
+                 WHERE application_id = ?1",
+                params![payload.application_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(None);
+        if let Some(last_sent) = last_sent {
+            if now.saturating_sub(last_sent) < anti_abuse.verify_email_cooldown_secs {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(ApiMessage {
+                        message: "发送过于频繁，请稍后再试".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+    let new_token = generate_verify_token();
+    {
+        let conn = state.db.lock().unwrap();
+        let updated = conn
+            .execute(
+                "UPDATE friend_link_applications
+                 SET verify_token = ?1, updated_at = ?2
+                 WHERE id = ?3 AND status = 'verify_pending' AND verify_token = ?4",
+                params![new_token, now, payload.application_id, token],
+            )
+            .unwrap_or(0);
+        if updated == 0 {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiMessage {
+                    message: "验证 token 已更新，请刷新后重试".to_string(),
+                }),
+            )
+                .into_response();
+        }
     }
     let notify_cfg = {
         let conn = state.db.lock().unwrap();
@@ -1853,11 +1939,11 @@ async fn links_verify_email_send(
     let verify_url = anti_abuse
         .public_base_url
         .as_deref()
-        .map(|base| format!("{}/links/verify/email?token={}", base.trim_end_matches('/'), token))
-        .unwrap_or_else(|| format!("/links/verify/email?token={}", token));
+        .map(|base| format!("{}/links/verify/email?token={}", base.trim_end_matches('/'), new_token))
+        .unwrap_or_else(|| format!("/links/verify/email?token={}", new_token));
     let plain = format!(
         "站点：{}\n请点击链接完成邮箱验证（完成后进入审核队列）：\n{}\n\n若链接无法点击，可复制 token：{}\n",
-        site_name, verify_url, token
+        site_name, verify_url, new_token
     );
     let html = format!(
         r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;">
@@ -1878,7 +1964,7 @@ async fn links_verify_email_send(
 </body></html>"#,
         name = escape_html(&site_name),
         url = escape_html(&verify_url),
-        token = escape_html(&token)
+        token = escape_html(&new_token)
     );
     match state
         .notifier
@@ -1891,20 +1977,42 @@ async fn links_verify_email_send(
         )
         .await
     {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(ApiMessage {
-                message: "验证邮件已发送，请检查收件箱".to_string(),
-            }),
-        )
-            .into_response(),
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiMessage {
-                message: format!("发送失败：{}", err),
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            {
+                let conn = state.db.lock().unwrap();
+                let _ = conn.execute(
+                    "INSERT INTO friend_link_verify_email_log (application_id, ip, created_at)
+                     VALUES (?1, ?2, ?3)",
+                    params![payload.application_id, ip_value, now],
+                );
+            }
+            (
+                StatusCode::OK,
+                Json(VerifyEmailSendResponse {
+                    message: "验证邮件已发送，请检查收件箱".to_string(),
+                    verify_token: Some(new_token),
+                }),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            {
+                let conn = state.db.lock().unwrap();
+                let _ = conn.execute(
+                    "UPDATE friend_link_applications
+                     SET verify_token = ?1, updated_at = ?2
+                     WHERE id = ?3 AND verify_token = ?4",
+                    params![token, now, payload.application_id, new_token],
+                );
+            }
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    message: format!("发送失败：{}", err),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -3542,6 +3650,17 @@ impl AntiAbuseConfig {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(3)
             .clamp(1, 20);
+        let verify_email_rate_limit_app_max =
+            std::env::var("LINK_VERIFY_EMAIL_RATE_LIMIT_APP_MAX")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(2)
+                .clamp(1, 10);
+        let verify_email_cooldown_secs = std::env::var("LINK_VERIFY_EMAIL_COOLDOWN_SEC")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(600)
+            .clamp(60, 7200);
 
         Self {
             captcha,
@@ -3558,6 +3677,8 @@ impl AntiAbuseConfig {
             public_base_url,
             verify_email_rate_limit_window_secs,
             verify_email_rate_limit_max,
+            verify_email_rate_limit_app_max,
+            verify_email_cooldown_secs,
         }
     }
 }
@@ -3737,6 +3858,14 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(defaults.verify_email_rate_limit_max)
         .clamp(1, 20);
+    let verify_email_rate_limit_app_max = read_setting(conn, "verify_email_rate_limit_app_max")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.verify_email_rate_limit_app_max)
+        .clamp(1, 10);
+    let verify_email_cooldown_secs = read_setting(conn, "verify_email_cooldown_sec")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.verify_email_cooldown_secs)
+        .clamp(60, 7200);
 
     AntiAbuseConfig {
         captcha,
@@ -3753,6 +3882,8 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
         public_base_url,
         verify_email_rate_limit_window_secs,
         verify_email_rate_limit_max,
+        verify_email_rate_limit_app_max,
+        verify_email_cooldown_secs,
     }
 }
 

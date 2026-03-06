@@ -174,6 +174,8 @@ sudo systemctl enable --now review-reporter
 - `LINK_PUBLIC_BASE_URL=https://m.ratf.cn`
 - `LINK_VERIFY_EMAIL_RATE_LIMIT_WINDOW_SEC=1800`
 - `LINK_VERIFY_EMAIL_RATE_LIMIT_MAX=3`
+- `LINK_VERIFY_EMAIL_RATE_LIMIT_APP_MAX=2`
+- `LINK_VERIFY_EMAIL_COOLDOWN_SEC=600`
 
 说明：申请页前端会通过 `GET /links/apply/config` 自动获取 captcha provider 与 site key。
 验证方式说明：`/.well-known/meow-links.txt`、DNS TXT `_meow-links`、首页 meta `name="meow-links"` 或邮箱验证任意一种通过即可进入审核。

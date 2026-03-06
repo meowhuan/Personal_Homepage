@@ -51,6 +51,8 @@ cargo run
 - `LINK_PUBLIC_BASE_URL` (optional, used for email verification link base url)
 - `LINK_VERIFY_EMAIL_RATE_LIMIT_WINDOW_SEC` (optional, default `1800`, rate limit window)
 - `LINK_VERIFY_EMAIL_RATE_LIMIT_MAX` (optional, default `3`, max sends per IP within window)
+- `LINK_VERIFY_EMAIL_RATE_LIMIT_APP_MAX` (optional, default `2`, max sends per application within window)
+- `LINK_VERIFY_EMAIL_COOLDOWN_SEC` (optional, default `600`, cooldown between sends per application)
 
 `.env` 示例 / Example:
 
@@ -78,7 +80,7 @@ STATUS_TOKEN=your_token
 - `POST /links/apply` (友链申请，无需 token，支持 TG/SMTP 通知)
 - `GET /links/apply/config` (公开申请配置，返回 captcha provider/site key)
 - `POST /links/verify/http` (公开验证接口：检测 `/.well-known/meow-links.txt` token)
-- `POST /links/verify/email/send` (公开验证接口：发送邮箱验证链接，需携带申请时的 `verify_token`)
+- `POST /links/verify/email/send` (公开验证接口：发送邮箱验证链接，需携带申请时的 `verify_token`，captcha 开启时需带 `captcha_token`)
 - `GET /links/verify/email?token=...` (公开验证接口：点击后进入审核队列)
 - `GET /links/applications` (需要 token，申请列表)
 - `POST /links/review` (需要 token，审核通过/拒绝)
