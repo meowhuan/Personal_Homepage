@@ -34,6 +34,16 @@ cargo run
 - `LINK_SMTP_STARTTLS` (optional, default `true`, set `0`/`false` to disable)
 - `LINK_REVIEW_REPORT_TOKEN` (optional, internal review reporter token; default same as `STATUS_TOKEN`)
 - `LINK_BACKLINK_ENFORCE_HOURS` (optional, default `24`, backlink grace window when approved)
+- `LINK_CAPTCHA_PROVIDER` (optional: `none`/`turnstile`/`hcaptcha`, default `none`)
+- `LINK_TURNSTILE_SITE_KEY` (required if `LINK_CAPTCHA_PROVIDER=turnstile`)
+- `LINK_TURNSTILE_SECRET` (required if `LINK_CAPTCHA_PROVIDER=turnstile`)
+- `LINK_HCAPTCHA_SITE_KEY` (required if `LINK_CAPTCHA_PROVIDER=hcaptcha`)
+- `LINK_HCAPTCHA_SECRET` (required if `LINK_CAPTCHA_PROVIDER=hcaptcha`)
+- `LINK_APPLY_RATE_LIMIT_WINDOW_SEC` (optional, default `3600`)
+- `LINK_APPLY_RATE_LIMIT_MAX` (optional, default `3`, max applies per IP within window)
+- `LINK_BLOCK_DISPOSABLE_EMAIL` (optional, default `true`)
+- `LINK_BLOCK_EDU_GOV_EMAIL` (optional, default `true`)
+- `LINK_APPLY_DENY_HOSTS` (optional, additional blocked host list; separated by comma/semicolon)
 
 `.env` 示例 / Example:
 
@@ -59,6 +69,7 @@ STATUS_TOKEN=your_token
 - `GET /blog/admin` (简易管理页面)
 - `GET /links` (公开友链列表)
 - `POST /links/apply` (友链申请，无需 token，支持 TG/SMTP 通知)
+- `GET /links/apply/config` (公开申请配置，返回 captcha provider/site key)
 - `GET /links/applications` (需要 token，申请列表)
 - `POST /links/review` (需要 token，审核通过/拒绝)
 - `POST /links/sort` (需要 token，更新已收录友链排序)
@@ -74,6 +85,7 @@ STATUS_TOKEN=your_token
 - `GET /links/admin` (友链管理页面)
 
 说明：若申请记录包含 `email` 且 SMTP 已配置，`/links/review` 完成后会自动给申请者邮箱发送审核结果通知。
+`/links/apply` 风控：支持 captcha（Turnstile/hCaptcha）、按 IP 限流、一次性邮箱拦截、`edu/gov` 邮箱拦截、站点域名黑名单拦截。
 审查拆分：公网后端不再主动抓取外站（避免暴露公网服务器 IP）。请将审查任务部署在内网服务，由内网服务调用 `.../review/report/...` 接口将审核/下架结果上报回公网后端。
 内网审查服务（`review-reporter`）的发行版部署与 systemd 常驻配置见 `status-backend/DEPLOY.md`。
 排障可使用单次模式：`review-reporter --once` 或设置 `REVIEW_RUN_ONCE=1`。
@@ -99,6 +111,9 @@ STATUS_TOKEN=your_token
   - 含 `<title>`：`+5`
   - 含 `description`：`+5`
   - 含 `meta`：`+6`（否则 `-6`）
+- 名称一致性检查（`site_name` vs `<title>`）：
+  - `sim < REVIEW_TITLE_SIM_REJECT_BELOW`：自动拒绝
+  - `REVIEW_TITLE_SIM_REJECT_BELOW <= sim < REVIEW_TITLE_SIM_PENDING_BELOW`：转人工
 - 包含本站链接（`LINK_BACKLINK_TARGET`）：`+10`，否则 `-10`
 - 第三方 SEO 接口（可选，内网 worker 配置后生效）：
   - `REVIEW_SEO_PROVIDER=generic`：调用自定义评分接口，返回 `score (0~100)`
@@ -127,6 +142,8 @@ Playwright 渲染抓取可选环境变量（`review-reporter`）：
 - `REVIEW_JS_RENDER_WAIT_UNTIL`（`load`/`domcontentloaded`/`networkidle`，默认 `networkidle`）
 - `REVIEW_JS_RENDER_WAIT_AFTER_MS`（默认 `800`，范围 `0~5000`）
 - `REVIEW_JS_RENDER_MAX_PAGES`（每次回链检测最多渲染页数，默认 `2`，范围 `1~8`）
+- `REVIEW_TITLE_SIM_PENDING_BELOW`（默认 `0.35`，低于该值转人工）
+- `REVIEW_TITLE_SIM_REJECT_BELOW`（默认 `0.18`，低于该值自动拒绝）
 
 ### 3) 邮件通知触发
 

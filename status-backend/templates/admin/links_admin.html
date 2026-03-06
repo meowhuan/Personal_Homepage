@@ -190,6 +190,56 @@
                 <button id="test-smtp" class="ghost">发送测试邮件</button>
               </div>
             </div>
+
+            <hr style="margin: 14px 0; border: 0; border-top: 1px dashed rgba(234, 219, 234, 0.9);" />
+            <strong>申请风控配置</strong>
+            <div class="small" style="margin-top:6px;">
+              Captcha Secret 留空不改，输入 `-` 表示清空。Captcha Site Key 会公开给申请页前端使用。
+            </div>
+            <div class="grid-2" style="margin-top:10px;">
+              <div>
+                <label>Captcha Provider</label>
+                <select id="captcha_provider" style="width:100%;height:40px;border:1px solid #eadbea;border-radius:12px;padding:0 12px;background:rgba(255,255,255,0.84);">
+                  <option value="">关闭</option>
+                  <option value="turnstile">Turnstile</option>
+                  <option value="hcaptcha">hCaptcha</option>
+                </select>
+              </div>
+              <div>
+                <label>Captcha Site Key</label>
+                <input id="captcha_site_key" type="text" placeholder="前端公开 Site Key" />
+              </div>
+              <div>
+                <label>Captcha Secret（留空不改，输入 `-` 清空）</label>
+                <input id="captcha_secret" type="password" placeholder="服务端验证 Secret" />
+              </div>
+              <div>
+                <label>Captcha Secret 状态</label>
+                <input id="captcha_secret_state" type="text" disabled placeholder="未加载" />
+              </div>
+              <div>
+                <label>IP 限流窗口秒数</label>
+                <input id="apply_rate_limit_window_sec" type="number" min="60" max="86400" />
+              </div>
+              <div>
+                <label>窗口内最大申请次数</label>
+                <input id="apply_rate_limit_max" type="number" min="1" max="30" />
+              </div>
+              <div>
+                <label>申请域名黑名单（逗号分隔）</label>
+                <input id="apply_deny_hosts" type="text" placeholder="如：aliyun.com,qq.com,baidu.com" />
+              </div>
+              <div class="row-inline small" style="align-items:flex-end;">
+                <label class="row-inline small">
+                  <input id="block_disposable_email" type="checkbox" style="width:auto;" checked />
+                  屏蔽一次性邮箱
+                </label>
+                <label class="row-inline small">
+                  <input id="block_edu_gov_email" type="checkbox" style="width:auto;" checked />
+                  屏蔽 edu/gov 邮箱
+                </label>
+              </div>
+            </div>
           </div>
 
         </div>
@@ -235,6 +285,7 @@
 
       const readSettingsForm = () => {
         const passRaw = document.getElementById("smtp_pass").value.trim();
+        const captchaSecretRaw = document.getElementById("captcha_secret").value.trim();
         return {
           tg_bot_token: document.getElementById("tg_bot_token").value.trim(),
           tg_chat_id: document.getElementById("tg_chat_id").value.trim(),
@@ -244,7 +295,15 @@
           smtp_pass: passRaw === "" ? null : (passRaw === "-" ? "" : passRaw),
           smtp_from: document.getElementById("smtp_from").value.trim(),
           smtp_to: document.getElementById("smtp_to").value.trim(),
-          smtp_starttls: document.getElementById("smtp_starttls").checked
+          smtp_starttls: document.getElementById("smtp_starttls").checked,
+          captcha_provider: document.getElementById("captcha_provider").value.trim() || null,
+          captcha_site_key: document.getElementById("captcha_site_key").value.trim(),
+          captcha_secret: captchaSecretRaw === "" ? null : (captchaSecretRaw === "-" ? "" : captchaSecretRaw),
+          apply_rate_limit_window_sec: Number(document.getElementById("apply_rate_limit_window_sec").value || 0) || null,
+          apply_rate_limit_max: Number(document.getElementById("apply_rate_limit_max").value || 0) || null,
+          block_disposable_email: document.getElementById("block_disposable_email").checked,
+          block_edu_gov_email: document.getElementById("block_edu_gov_email").checked,
+          apply_deny_hosts: document.getElementById("apply_deny_hosts").value.trim()
         };
       };
 
@@ -258,6 +317,15 @@
         document.getElementById("smtp_from").value = cfg.smtp_from || "";
         document.getElementById("smtp_to").value = cfg.smtp_to || "";
         document.getElementById("smtp_starttls").checked = cfg.smtp_starttls !== false;
+        document.getElementById("captcha_provider").value = cfg.captcha_provider || "";
+        document.getElementById("captcha_site_key").value = cfg.captcha_site_key || "";
+        document.getElementById("captcha_secret").value = "";
+        document.getElementById("captcha_secret_state").value = cfg.captcha_secret_set ? "已配置" : "未配置";
+        document.getElementById("apply_rate_limit_window_sec").value = Number(cfg.apply_rate_limit_window_sec || 3600);
+        document.getElementById("apply_rate_limit_max").value = Number(cfg.apply_rate_limit_max || 3);
+        document.getElementById("block_disposable_email").checked = cfg.block_disposable_email !== false;
+        document.getElementById("block_edu_gov_email").checked = cfg.block_edu_gov_email !== false;
+        document.getElementById("apply_deny_hosts").value = cfg.apply_deny_hosts || "";
       };
 
       const renderApplications = (items = []) => {

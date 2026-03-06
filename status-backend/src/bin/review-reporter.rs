@@ -81,6 +81,8 @@ struct JsRenderConfig {
 struct WorkerConfig {
     seo_provider: Option<SeoProviderConfig>,
     js_render: Option<JsRenderConfig>,
+    title_similarity_pending_below: f32,
+    title_similarity_reject_below: f32,
 }
 
 #[tokio::main]
@@ -108,11 +110,13 @@ async fn main() {
         .build()
         .expect("build client");
     eprintln!(
-        "[review-worker] started: api_base={} interval_sec={} seo_provider={} js_render={} run_once={}",
+        "[review-worker] started: api_base={} interval_sec={} seo_provider={} js_render={} title_sim(pending<{:.2},reject<{:.2}) run_once={}",
         base,
         interval_secs,
         worker_config.provider_label(),
         worker_config.js_render_label(),
+        worker_config.title_similarity_pending_below,
+        worker_config.title_similarity_reject_below,
         run_once
     );
 
@@ -309,6 +313,8 @@ async fn evaluate_application(
 ) -> Decision {
     let mut score = 50;
     let mut reasons: Vec<String> = Vec::new();
+    let mut force_pending = false;
+    let mut force_reject_reason: Option<String> = None;
 
     if looks_suspicious_domain(&app.site_url) {
         score -= 40;
@@ -350,6 +356,21 @@ async fn evaluate_application(
             reasons.push("站点主页访问失败".to_string());
         }
         let lower = html.to_lowercase();
+        if let Some(title) = extract_html_title(&html) {
+            let similarity = title_name_similarity(&app.site_name, &title);
+            if similarity < worker_config.title_similarity_reject_below {
+                force_reject_reason = Some(format!(
+                    "站点名称与页面标题明显不匹配(sim={:.2})",
+                    similarity
+                ));
+            } else if similarity < worker_config.title_similarity_pending_below {
+                force_pending = true;
+                reasons.push(format!("站点名称与页面标题相似度偏低(sim={:.2})", similarity));
+            }
+        } else {
+            force_pending = true;
+            reasons.push("未提取到页面标题，转人工复核".to_string());
+        }
         if lower.contains("<title") {
             score += 5;
         }
@@ -407,7 +428,12 @@ async fn evaluate_application(
         }
     }
 
-    let action = if score >= 80 {
+    let action = if let Some(reason) = force_reject_reason {
+        reasons.push(reason);
+        "reject"
+    } else if force_pending {
+        "pending"
+    } else if score >= 80 {
         "approve"
     } else if score < 40 {
         "reject"
@@ -989,6 +1015,87 @@ fn contains_backlink(page_lower: &str, backlink_target: &str) -> bool {
     candidates.iter().any(|needle| page_lower.contains(needle))
 }
 
+fn extract_html_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title")?;
+    let after = &lower[start..];
+    let gt_offset = after.find('>')?;
+    let content_start = start + gt_offset + 1;
+    let content_rest = &lower[content_start..];
+    let end_offset = content_rest.find("</title>")?;
+    let content_end = content_start + end_offset;
+    if content_end <= content_start || content_end > html.len() {
+        return None;
+    }
+    let raw = html[content_start..content_end].trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
+    }
+}
+
+fn title_name_similarity(site_name: &str, title: &str) -> f32 {
+    let a = normalize_similarity_text(site_name);
+    let b = normalize_similarity_text(title);
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    if a == b || a.contains(&b) || b.contains(&a) {
+        return 1.0;
+    }
+    dice_coefficient_bigrams(&a, &b)
+}
+
+fn normalize_similarity_text(raw: &str) -> String {
+    raw.chars()
+        .flat_map(|c| c.to_lowercase())
+        .filter(|c| c.is_ascii_alphanumeric() || is_cjk_char(*c))
+        .collect::<String>()
+}
+
+fn is_cjk_char(c: char) -> bool {
+    let code = c as u32;
+    (0x4E00..=0x9FFF).contains(&code)
+        || (0x3400..=0x4DBF).contains(&code)
+        || (0xF900..=0xFAFF).contains(&code)
+}
+
+fn dice_coefficient_bigrams(a: &str, b: &str) -> f32 {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    if a_chars.len() < 2 || b_chars.len() < 2 {
+        return if a == b { 1.0 } else { 0.0 };
+    }
+    let a_pairs = char_bigrams(&a_chars);
+    let b_pairs = char_bigrams(&b_chars);
+    if a_pairs.is_empty() || b_pairs.is_empty() {
+        return 0.0;
+    }
+    let mut b_count = HashMap::new();
+    for pair in b_pairs {
+        *b_count.entry(pair).or_insert(0usize) += 1;
+    }
+    let mut intersect = 0usize;
+    for pair in a_pairs {
+        if let Some(count) = b_count.get_mut(&pair) {
+            if *count > 0 {
+                *count -= 1;
+                intersect += 1;
+            }
+        }
+    }
+    (2.0 * intersect as f32) / ((a_chars.len() - 1 + b_chars.len() - 1) as f32)
+}
+
+fn char_bigrams(chars: &[char]) -> Vec<(char, char)> {
+    let mut out = Vec::with_capacity(chars.len().saturating_sub(1));
+    for i in 0..chars.len().saturating_sub(1) {
+        out.push((chars[i], chars[i + 1]));
+    }
+    out
+}
+
 fn contains_spam_keyword(content: &str) -> bool {
     let text = content.to_lowercase();
     let spam_words = [
@@ -1173,9 +1280,22 @@ impl WorkerConfig {
                     .unwrap_or(2)
                     .clamp(1, 8),
             });
+        let title_similarity_pending_below = std::env::var("REVIEW_TITLE_SIM_PENDING_BELOW")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.35)
+            .clamp(0.05, 0.95);
+        let title_similarity_reject_below = std::env::var("REVIEW_TITLE_SIM_REJECT_BELOW")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.18)
+            .clamp(0.01, 0.80)
+            .min((title_similarity_pending_below - 0.01).max(0.01));
         Self {
             seo_provider,
             js_render,
+            title_similarity_pending_below,
+            title_similarity_reject_below,
         }
     }
 

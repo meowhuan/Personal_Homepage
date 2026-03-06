@@ -135,6 +135,8 @@ sudo systemctl enable --now review-reporter
 - `REVIEW_RUN_ONCE` (optional, `1/true` to run single cycle then exit, useful for debugging)
 - `REVIEW_SEO_PROVIDER` (optional: `none`/`generic`/`serpapi`, default `none`)
 - `REVIEW_SEO_MAX_BONUS` (optional, default `12`, range `1~30`)
+- `REVIEW_TITLE_SIM_PENDING_BELOW` (optional, default `0.35`)
+- `REVIEW_TITLE_SIM_REJECT_BELOW` (optional, default `0.18`)
 - `REVIEW_JS_RENDER` (optional, `1/true` to enable Playwright rendering fallback for backlink detection)
 - `REVIEW_JS_RENDER_CMD` (optional, default `node`)
 - `REVIEW_JS_RENDER_SCRIPT` (optional, default `scripts/playwright-fetch.mjs`)
@@ -155,6 +157,18 @@ sudo systemctl enable --now review-reporter
 - `REVIEW_SERPAPI_HL` (optional, default `zh-cn`)
 - `REVIEW_SERPAPI_GL` (optional, default `cn`)
 - `REVIEW_SERPAPI_NUM` (optional, default `10`, range `5~20`)
+
+公网后端申请接口风控（`status-backend`）推荐配置：
+- `LINK_CAPTCHA_PROVIDER=turnstile` 或 `hcaptcha`
+- `LINK_TURNSTILE_SITE_KEY` / `LINK_HCAPTCHA_SITE_KEY`（前端渲染 key）
+- `LINK_TURNSTILE_SECRET` / `LINK_HCAPTCHA_SECRET`（服务端校验 secret）
+- `LINK_APPLY_RATE_LIMIT_WINDOW_SEC=3600`
+- `LINK_APPLY_RATE_LIMIT_MAX=3`
+- `LINK_BLOCK_DISPOSABLE_EMAIL=true`
+- `LINK_BLOCK_EDU_GOV_EMAIL=true`
+- `LINK_APPLY_DENY_HOSTS=aliyun.com,qq.com,baidu.com`（按需扩展）
+
+说明：申请页前端会通过 `GET /links/apply/config` 自动获取 captcha provider 与 site key。
 
 第三方 SEO API（`generic` provider）返回 JSON 约定（最小）：
 

@@ -19,7 +19,7 @@ use std::{
     collections::HashSet,
     net::SocketAddr,
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
@@ -31,6 +31,7 @@ struct AppState {
     review_report_token: String,
     notifier: Arc<Notifier>,
     auto_review: Arc<AutoReviewConfig>,
+    anti_abuse: Arc<AntiAbuseConfig>,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +196,12 @@ struct LinkApplyPayload {
     description: Option<String>,
     email: Option<String>,
     note: Option<String>,
+    captcha_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CaptchaVerifyResponse {
+    success: bool,
 }
 
 #[derive(Serialize)]
@@ -271,6 +278,14 @@ struct LinkSettingsResponse {
     smtp_from: Option<String>,
     smtp_to: Option<String>,
     smtp_starttls: bool,
+    captcha_provider: Option<String>,
+    captcha_site_key: Option<String>,
+    captcha_secret_set: bool,
+    apply_rate_limit_window_sec: i64,
+    apply_rate_limit_max: i64,
+    block_disposable_email: bool,
+    block_edu_gov_email: bool,
+    apply_deny_hosts: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -284,6 +299,21 @@ struct LinkSettingsPayload {
     smtp_from: Option<String>,
     smtp_to: Option<String>,
     smtp_starttls: Option<bool>,
+    captcha_provider: Option<String>,
+    captcha_site_key: Option<String>,
+    captcha_secret: Option<String>,
+    apply_rate_limit_window_sec: Option<i64>,
+    apply_rate_limit_max: Option<i64>,
+    block_disposable_email: Option<bool>,
+    block_edu_gov_email: Option<bool>,
+    apply_deny_hosts: Option<String>,
+}
+
+#[derive(Serialize)]
+struct LinkApplyConfigResponse {
+    captcha_provider: Option<String>,
+    captcha_site_key: Option<String>,
+    captcha_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -375,6 +405,31 @@ struct AutoReviewConfig {
     backlink_window_secs: i64,
 }
 
+#[derive(Clone)]
+struct AntiAbuseConfig {
+    captcha: Option<CaptchaConfig>,
+    apply_rate_limit_window_secs: i64,
+    apply_rate_limit_max: i64,
+    disposable_email_block: bool,
+    edu_gov_email_block: bool,
+    deny_hosts_raw: Option<String>,
+    deny_hosts: HashSet<String>,
+}
+
+#[derive(Clone)]
+struct CaptchaConfig {
+    provider: CaptchaProvider,
+    site_key: String,
+    secret: String,
+    verify_url: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CaptchaProvider {
+    Turnstile,
+    Hcaptcha,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SmtpMode {
     StartTls,
@@ -400,6 +455,7 @@ async fn main() {
         std::env::var("STATUS_BUILD").unwrap_or_else(|_| "status-backend v1.2-music".to_string());
     let notifier = Arc::new(Notifier::from_env());
     let auto_review = Arc::new(AutoReviewConfig::from_env());
+    let anti_abuse = Arc::new(AntiAbuseConfig::from_env());
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -537,6 +593,7 @@ async fn main() {
         review_report_token,
         notifier,
         auto_review,
+        anti_abuse,
     };
 
     let cors = CorsLayer::new()
@@ -576,6 +633,7 @@ async fn main() {
         .route("/blog/admin", get(admin_pages::blog_admin_page))
         .route("/links", get(links_list))
         .route("/links/apply", post(links_apply))
+        .route("/links/apply/config", get(links_apply_config))
         .route("/links/applications", get(links_applications))
         .route("/links/review", post(links_review))
         .route("/links/sort", post(links_sort))
@@ -1164,6 +1222,10 @@ async fn links_apply(
     headers: HeaderMap,
     Json(payload): Json<LinkApplyPayload>,
 ) -> impl IntoResponse {
+    let anti_abuse = {
+        let conn = state.db.lock().unwrap();
+        resolve_anti_abuse_config(&conn, &state.anti_abuse)
+    };
     let site_name = payload.site_name.trim();
     if site_name.is_empty() || site_name.chars().count() > 32 {
         return (
@@ -1181,6 +1243,15 @@ async fn links_apply(
             StatusCode::BAD_REQUEST,
             Json(ApiMessage {
                 message: "站点地址必须是可访问的 http/https 链接".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if is_disallowed_link_host(site_url, &anti_abuse) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该站点类型不接受友链申请，请提交可互链的个人/博客站点".to_string(),
             }),
         )
             .into_response();
@@ -1211,17 +1282,88 @@ async fn links_apply(
         )
             .into_response();
     }
+    let email = email.unwrap();
+    if !is_valid_email_address(&email) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "联系邮箱格式不正确".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if anti_abuse.disposable_email_block && is_disposable_email_domain(&email) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "不支持一次性邮箱，请使用常用邮箱提交".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if anti_abuse.edu_gov_email_block && is_edu_or_gov_email_domain(&email) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "不支持 .edu/.gov 邮箱，请使用常用邮箱提交".to_string(),
+            }),
+        )
+            .into_response();
+    }
     let note = normalize_optional(payload.note, 280);
-    let ip = client_ip(&headers);
+    let ip = client_ip(&headers).or_else(|| Some("unknown".to_string()));
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_string());
+    let captcha_token = normalize_optional(payload.captcha_token, 4096);
     let now = now_ts();
     let application_id: i64;
 
+    if let Some(captcha_cfg) = anti_abuse.captcha.as_ref() {
+        let Some(token) = captcha_token.as_deref() else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    message: "请完成人机验证后再提交".to_string(),
+                }),
+            )
+                .into_response();
+        };
+        let verified = verify_captcha(captcha_cfg, token, ip.as_deref()).await;
+        if !verified {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiMessage {
+                    message: "人机验证失败，请刷新后重试".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
     {
         let conn = state.db.lock().unwrap();
+        let recent_apply_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM friend_link_applications
+                 WHERE ip = ?1 AND created_at >= ?2",
+                params![
+                    ip.as_deref().unwrap_or("unknown"),
+                    now - anti_abuse.apply_rate_limit_window_secs
+                ],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if recent_apply_count >= anti_abuse.apply_rate_limit_max {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiMessage {
+                    message: "提交过于频繁，请稍后再试".to_string(),
+                }),
+            )
+                .into_response();
+        }
         let pending_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM friend_link_applications
@@ -2062,7 +2204,7 @@ async fn links_settings_get(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let conn = state.db.lock().unwrap();
-    let settings = state.notifier.resolved_settings(&conn);
+    let settings = build_link_settings_response(&state, &conn);
     (StatusCode::OK, Json(settings)).into_response()
 }
 
@@ -2125,6 +2267,59 @@ async fn links_settings_set(
                 .smtp_starttls
                 .map(|v| if v { "1".to_string() } else { "0".to_string() }),
         ),
+        (
+            "captcha_provider",
+            payload
+                .captcha_provider
+                .map(|v| v.trim().chars().take(32).collect::<String>()),
+        ),
+        (
+            "captcha_site_key",
+            payload
+                .captcha_site_key
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
+        ),
+        (
+            "captcha_secret",
+            payload.captcha_secret.map(|v| {
+                let trimmed = v.trim();
+                if trimmed == "-" {
+                    String::new()
+                } else {
+                    trimmed.chars().take(255).collect::<String>()
+                }
+            }),
+        ),
+        (
+            "apply_rate_limit_window_sec",
+            payload
+                .apply_rate_limit_window_sec
+                .map(|v| v.clamp(60, 86400).to_string()),
+        ),
+        (
+            "apply_rate_limit_max",
+            payload
+                .apply_rate_limit_max
+                .map(|v| v.clamp(1, 30).to_string()),
+        ),
+        (
+            "block_disposable_email",
+            payload
+                .block_disposable_email
+                .map(|v| if v { "1".to_string() } else { "0".to_string() }),
+        ),
+        (
+            "block_edu_gov_email",
+            payload
+                .block_edu_gov_email
+                .map(|v| if v { "1".to_string() } else { "0".to_string() }),
+        ),
+        (
+            "apply_deny_hosts",
+            payload
+                .apply_deny_hosts
+                .map(|v| v.trim().chars().take(1024).collect::<String>()),
+        ),
     ];
     for (key, value) in updates {
         if let Some(value) = value {
@@ -2155,8 +2350,24 @@ async fn links_settings_set(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    let settings = state.notifier.resolved_settings(&conn);
+    let settings = build_link_settings_response(&state, &conn);
     (StatusCode::OK, Json(settings)).into_response()
+}
+
+async fn links_apply_config(State(state): State<AppState>) -> impl IntoResponse {
+    let anti = {
+        let conn = state.db.lock().unwrap();
+        resolve_anti_abuse_config(&conn, &state.anti_abuse)
+    };
+    let response = LinkApplyConfigResponse {
+        captcha_provider: anti
+            .captcha
+            .as_ref()
+            .map(|cfg| cfg.provider.as_str().to_string()),
+        captcha_site_key: anti.captcha.as_ref().map(|cfg| cfg.site_key.clone()),
+        captcha_enabled: anti.captcha.is_some(),
+    };
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 async fn links_settings_test_smtp(
@@ -2433,21 +2644,6 @@ impl Notifier {
         }
     }
 
-    fn resolved_settings(&self, conn: &Connection) -> LinkSettingsResponse {
-        let cfg = self.runtime_config(conn);
-        LinkSettingsResponse {
-            tg_bot_token: cfg.tg_bot_token.clone(),
-            tg_chat_id: cfg.tg_chat_id.clone(),
-            smtp_host: cfg.smtp.as_ref().map(|v| v.host.clone()),
-            smtp_port: cfg.smtp.as_ref().map(|v| v.port),
-            smtp_user: cfg.smtp.as_ref().and_then(|v| v.username.clone()),
-            smtp_pass_set: cfg.smtp.as_ref().and_then(|v| v.password.clone()).is_some(),
-            smtp_from: cfg.smtp.as_ref().map(|v| v.from.clone()),
-            smtp_to: cfg.smtp.as_ref().map(|v| v.to.join(",")),
-            smtp_starttls: cfg.smtp.as_ref().map(|v| v.use_starttls).unwrap_or(true),
-        }
-    }
-
     async fn notify_review_result_email(
         &self,
         smtp_cfg: Option<&SmtpConfig>,
@@ -2699,6 +2895,306 @@ impl AutoReviewConfig {
             backlink_window_secs,
         }
     }
+}
+
+impl AntiAbuseConfig {
+    fn from_env() -> Self {
+        let provider = normalize_env("LINK_CAPTCHA_PROVIDER")
+            .and_then(|v| CaptchaProvider::from_str(&v));
+        let (site_key, secret) = match provider {
+            Some(CaptchaProvider::Turnstile) => (
+                normalize_env("LINK_TURNSTILE_SITE_KEY"),
+                normalize_env("LINK_TURNSTILE_SECRET"),
+            ),
+            Some(CaptchaProvider::Hcaptcha) => (
+                normalize_env("LINK_HCAPTCHA_SITE_KEY"),
+                normalize_env("LINK_HCAPTCHA_SECRET"),
+            ),
+            None => (None, None),
+        };
+        let captcha = match (provider, site_key, secret) {
+            (Some(provider), Some(site_key), Some(secret)) => Some(CaptchaConfig {
+                provider,
+                site_key,
+                secret,
+                verify_url: provider.verify_url().to_string(),
+            }),
+            _ => None,
+        };
+        let apply_rate_limit_window_secs = std::env::var("LINK_APPLY_RATE_LIMIT_WINDOW_SEC")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(3600)
+            .clamp(60, 86400);
+        let apply_rate_limit_max = std::env::var("LINK_APPLY_RATE_LIMIT_MAX")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(3)
+            .clamp(1, 30);
+        let disposable_email_block = std::env::var("LINK_BLOCK_DISPOSABLE_EMAIL")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
+            .unwrap_or(true);
+        let edu_gov_email_block = std::env::var("LINK_BLOCK_EDU_GOV_EMAIL")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "True"))
+            .unwrap_or(true);
+        let deny_hosts_raw = normalize_env("LINK_APPLY_DENY_HOSTS");
+        let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
+
+        Self {
+            captcha,
+            apply_rate_limit_window_secs,
+            apply_rate_limit_max,
+            disposable_email_block,
+            edu_gov_email_block,
+            deny_hosts_raw,
+            deny_hosts,
+        }
+    }
+}
+
+impl CaptchaProvider {
+    fn from_str(raw: &str) -> Option<Self> {
+        match raw.trim().to_lowercase().as_str() {
+            "turnstile" => Some(Self::Turnstile),
+            "hcaptcha" => Some(Self::Hcaptcha),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Turnstile => "turnstile",
+            Self::Hcaptcha => "hcaptcha",
+        }
+    }
+
+    fn verify_url(&self) -> &'static str {
+        match self {
+            Self::Turnstile => "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            Self::Hcaptcha => "https://hcaptcha.com/siteverify",
+        }
+    }
+}
+
+async fn verify_captcha(config: &CaptchaConfig, token: &str, remote_ip: Option<&str>) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let mut params: Vec<(&str, &str)> = vec![("secret", config.secret.as_str()), ("response", token)];
+    if let Some(ip) = remote_ip {
+        if !ip.is_empty() {
+            params.push(("remoteip", ip));
+        }
+    }
+    let resp = match client.post(&config.verify_url).form(&params).send().await {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    match resp.json::<CaptchaVerifyResponse>().await {
+        Ok(body) => body.success,
+        Err(_) => false,
+    }
+}
+
+fn load_deny_hosts(extra: Option<&str>) -> HashSet<String> {
+    let mut deny_hosts = default_deny_hosts();
+    if let Some(extra) = extra {
+        for host in extra.split(|c| c == ',' || c == '，' || c == ';' || c == '；') {
+            let normalized = normalize_host(host);
+            if !normalized.is_empty() {
+                deny_hosts.insert(normalized);
+            }
+        }
+    }
+    deny_hosts
+}
+
+fn default_deny_hosts() -> HashSet<String> {
+    let mut out = HashSet::new();
+    for host in [
+        "aliyun.com",
+        "alibaba.com",
+        "taobao.com",
+        "tmall.com",
+        "qq.com",
+        "wechat.com",
+        "weixin.qq.com",
+        "baidu.com",
+        "google.com",
+        "microsoft.com",
+        "apple.com",
+        "amazon.com",
+        "cloudflare.com",
+    ] {
+        out.insert(host.to_string());
+    }
+    out
+}
+
+fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> AntiAbuseConfig {
+    let provider = read_setting(conn, "captcha_provider")
+        .and_then(|v| CaptchaProvider::from_str(&v))
+        .or_else(|| defaults.captcha.as_ref().map(|cfg| cfg.provider));
+    let site_key = read_setting(conn, "captcha_site_key")
+        .or_else(|| defaults.captcha.as_ref().map(|cfg| cfg.site_key.clone()));
+    let secret = read_setting(conn, "captcha_secret")
+        .or_else(|| defaults.captcha.as_ref().map(|cfg| cfg.secret.clone()));
+    let captcha = match (provider, site_key, secret) {
+        (Some(provider), Some(site_key), Some(secret)) => Some(CaptchaConfig {
+            provider,
+            site_key,
+            secret,
+            verify_url: provider.verify_url().to_string(),
+        }),
+        _ => None,
+    };
+    let apply_rate_limit_window_secs = read_setting(conn, "apply_rate_limit_window_sec")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.apply_rate_limit_window_secs)
+        .clamp(60, 86400);
+    let apply_rate_limit_max = read_setting(conn, "apply_rate_limit_max")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(defaults.apply_rate_limit_max)
+        .clamp(1, 30);
+    let disposable_email_block = read_setting(conn, "block_disposable_email")
+        .map(|v| v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(defaults.disposable_email_block);
+    let edu_gov_email_block = read_setting(conn, "block_edu_gov_email")
+        .map(|v| v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(defaults.edu_gov_email_block);
+    let deny_hosts_raw = read_setting(conn, "apply_deny_hosts").or_else(|| defaults.deny_hosts_raw.clone());
+    let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
+
+    AntiAbuseConfig {
+        captcha,
+        apply_rate_limit_window_secs,
+        apply_rate_limit_max,
+        disposable_email_block,
+        edu_gov_email_block,
+        deny_hosts_raw,
+        deny_hosts,
+    }
+}
+
+fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSettingsResponse {
+    let notify_cfg = state.notifier.runtime_config(conn);
+    let anti = resolve_anti_abuse_config(conn, &state.anti_abuse);
+    let captcha_provider_value = read_setting(conn, "captcha_provider")
+        .or_else(|| {
+            state
+                .anti_abuse
+                .captcha
+                .as_ref()
+                .map(|cfg| cfg.provider.as_str().to_string())
+        });
+    let captcha_site_key_value = read_setting(conn, "captcha_site_key")
+        .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.site_key.clone()));
+    let captcha_secret_set = read_setting(conn, "captcha_secret")
+        .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.secret.clone()))
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    LinkSettingsResponse {
+        tg_bot_token: notify_cfg.tg_bot_token.clone(),
+        tg_chat_id: notify_cfg.tg_chat_id.clone(),
+        smtp_host: notify_cfg.smtp.as_ref().map(|v| v.host.clone()),
+        smtp_port: notify_cfg.smtp.as_ref().map(|v| v.port),
+        smtp_user: notify_cfg.smtp.as_ref().and_then(|v| v.username.clone()),
+        smtp_pass_set: notify_cfg.smtp.as_ref().and_then(|v| v.password.clone()).is_some(),
+        smtp_from: notify_cfg.smtp.as_ref().map(|v| v.from.clone()),
+        smtp_to: notify_cfg.smtp.as_ref().map(|v| v.to.join(",")),
+        smtp_starttls: notify_cfg.smtp.as_ref().map(|v| v.use_starttls).unwrap_or(true),
+        captcha_provider: captcha_provider_value,
+        captcha_site_key: captcha_site_key_value,
+        captcha_secret_set,
+        apply_rate_limit_window_sec: anti.apply_rate_limit_window_secs,
+        apply_rate_limit_max: anti.apply_rate_limit_max,
+        block_disposable_email: anti.disposable_email_block,
+        block_edu_gov_email: anti.edu_gov_email_block,
+        apply_deny_hosts: anti.deny_hosts_raw.clone(),
+    }
+}
+
+fn is_disallowed_link_host(site_url: &str, anti_abuse: &AntiAbuseConfig) -> bool {
+    let host = Url::parse(site_url)
+        .ok()
+        .and_then(|u| u.host_str().map(normalize_host))
+        .unwrap_or_default();
+    if host.is_empty() {
+        return true;
+    }
+    anti_abuse
+        .deny_hosts
+        .iter()
+        .any(|deny| host == *deny || host.ends_with(&format!(".{}", deny)))
+}
+
+fn normalize_host(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('.')
+        .trim_start_matches("www.")
+        .to_lowercase()
+}
+
+fn is_valid_email_address(email: &str) -> bool {
+    let value = email.trim();
+    let mut parts = value.split('@');
+    let local = parts.next().unwrap_or_default();
+    let domain = parts.next().unwrap_or_default();
+    if parts.next().is_some() {
+        return false;
+    }
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn is_disposable_email_domain(email: &str) -> bool {
+    let domain = email
+        .rsplit('@')
+        .next()
+        .map(normalize_host)
+        .unwrap_or_default();
+    if domain.is_empty() {
+        return true;
+    }
+    let suffix_rules = [
+        "mailinator.com",
+        "guerrillamail.com",
+        "yopmail.com",
+        "tempmail",
+        "10minutemail",
+        "dropmail",
+        "sharklasers.com",
+        "dispostable.com",
+        "maildrop.cc",
+    ];
+    suffix_rules
+        .iter()
+        .any(|rule| domain == *rule || domain.contains(rule))
+}
+
+fn is_edu_or_gov_email_domain(email: &str) -> bool {
+    let domain = email
+        .rsplit('@')
+        .next()
+        .map(normalize_host)
+        .unwrap_or_default();
+    if domain.is_empty() {
+        return false;
+    }
+    domain == "edu"
+        || domain.ends_with(".edu")
+        || domain.ends_with(".edu.cn")
+        || domain == "gov"
+        || domain.ends_with(".gov")
+        || domain.ends_with(".gov.cn")
 }
 
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
