@@ -718,7 +718,16 @@ const {
             target="_blank"
             rel="noreferrer"
           >
-          GitHub 
+            GitHub
+          </a>
+          ·
+          <a
+            class="underline underline-offset-4"
+            href="https://icp.gov.moe/?keyword=20261211"
+            target="_blank"
+            rel="noreferrer"
+          >
+            萌ICP备20261211号
           </a>
         </footer>
       </div>
