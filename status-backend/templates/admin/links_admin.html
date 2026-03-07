@@ -136,6 +136,7 @@
                 <strong>已收录友链</strong>
                 <button id="save-sort" class="ghost">保存排序</button>
               </div>
+              <div class="small" id="unreachable-whitelist-preview">72h 可通性白名单：未配置</div>
               <div id="link-list" class="list"></div>
             </div>
           </div>
@@ -287,6 +288,7 @@
       const appListEl = document.getElementById("app-list");
       const verifyListEl = document.getElementById("verify-list");
       const linkListEl = document.getElementById("link-list");
+      const whitelistPreviewEl = document.getElementById("unreachable-whitelist-preview");
       const pendingCountEl = document.getElementById("pending-count");
       const verifyCountEl = document.getElementById("verify-count");
 
@@ -374,6 +376,10 @@
         document.getElementById("unreachable_whitelist_hosts").value = cfg.unreachable_whitelist_hosts || "";
         document.getElementById("verify_window_minutes").value = Number(cfg.verify_window_minutes || 120);
         document.getElementById("public_base_url").value = cfg.public_base_url || "";
+        const whitelistText = (cfg.unreachable_whitelist_hosts || "").trim();
+        whitelistPreviewEl.textContent = whitelistText
+          ? `72h 可通性白名单：${whitelistText}`
+          : "72h 可通性白名单：未配置";
       };
 
       const renderApplications = (items = []) => {
