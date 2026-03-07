@@ -127,7 +127,6 @@ STATUS_TOKEN=your_token
   - 含 `<title>`：`+5`
   - 含 `description`：`+5`
   - 含 `meta`：`+6`（否则 `-6`）
-- 名称一致性检查（`site_name` vs `<title>`）：
 - 包含本站链接（`LINK_BACKLINK_TARGET`）：`+10`，否则 `-10`
 - 第三方 SEO 接口（可选，内网 worker 配置后生效）：
   - `REVIEW_SEO_PROVIDER=generic`：调用自定义评分接口，返回 `score (0~100)`

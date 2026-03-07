@@ -309,8 +309,7 @@ async fn evaluate_application(
 ) -> Decision {
     let mut score = 50;
     let mut reasons: Vec<String> = Vec::new();
-    let mut force_pending = false;
-    let force_reject_reason: Option<String> = None;
+    let force_pending = false;
 
     if looks_suspicious_domain(&app.site_url) {
         score -= 40;
@@ -352,13 +351,6 @@ async fn evaluate_application(
             reasons.push("站点主页访问失败".to_string());
         }
         let lower = html.to_lowercase();
-        if extract_html_title(&html).is_none() {
-            force_pending = true;
-            reasons.push("未提取到页面标题，转人工复核".to_string());
-        }
-        if lower.contains("<title") {
-            score += 5;
-        }
         if lower.contains("description") {
             score += 5;
         }
@@ -413,10 +405,7 @@ async fn evaluate_application(
         }
     }
 
-    let action = if let Some(reason) = force_reject_reason {
-        reasons.push(reason);
-        "reject"
-    } else if force_pending {
+    let action = if force_pending {
         "pending"
     } else if score >= 80 {
         "approve"
@@ -998,26 +987,6 @@ fn contains_backlink(page_lower: &str, backlink_target: &str) -> bool {
         candidates.push(format!("{}/", normalized));
     }
     candidates.iter().any(|needle| page_lower.contains(needle))
-}
-
-fn extract_html_title(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
-    let start = lower.find("<title")?;
-    let after = &lower[start..];
-    let gt_offset = after.find('>')?;
-    let content_start = start + gt_offset + 1;
-    let content_rest = &lower[content_start..];
-    let end_offset = content_rest.find("</title>")?;
-    let content_end = content_start + end_offset;
-    if content_end <= content_start || content_end > html.len() {
-        return None;
-    }
-    let raw = html[content_start..content_end].trim();
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw.to_string())
-    }
 }
 
 fn contains_spam_keyword(content: &str) -> bool {

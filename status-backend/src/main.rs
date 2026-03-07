@@ -3892,6 +3892,7 @@ async fn verify_http_token_present(site_url: &str, token: &str) -> bool {
         Ok(v) => v,
         Err(_) => return false,
     };
+    let root_url = base.join("/").unwrap_or_else(|_| base.clone());
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
@@ -3917,20 +3918,14 @@ async fn verify_http_token_present(site_url: &str, token: &str) -> bool {
     }
 
     if let Ok(resp) = client
-        .get(base.as_str())
+        .get(root_url.as_str())
         .header("user-agent", "MeowVerifyWorker/1.0")
         .send()
         .await
     {
         if resp.status().is_success() {
             if let Ok(body) = resp.text().await {
-                let lower = body.to_lowercase();
-                if (lower.contains("name=\"meow-links\"")
-                    || lower.contains("name='meow-links'")
-                    || lower.contains("name=\"meow-links-token\"")
-                    || lower.contains("name='meow-links-token'"))
-                    && body.contains(token)
-                {
+                if meta_token_match(&body, token) {
                     return true;
                 }
             }
@@ -3946,22 +3941,59 @@ async fn verify_dns_txt_token(base: &Url, token: &str) -> bool {
         None => return false,
     };
     let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
-    let name = format!("_meow-links.{}", host.trim_end_matches('.'));
-    let lookup: TxtLookup =
-        match tokio::time::timeout(Duration::from_secs(4), resolver.txt_lookup(name)).await {
-            Ok(Ok(v)) => v,
-            _ => return false,
-        };
-    for txt in lookup.iter() {
-        for data in txt.txt_data() {
-            if let Ok(text) = std::str::from_utf8(data) {
-                if text.contains(token) {
-                    return true;
+    let host = host.trim_end_matches('.');
+    let host_no_www = host.trim_start_matches("www.");
+    let mut names = Vec::new();
+    names.push(format!("_meow-links.{}", host_no_www));
+    if host_no_www != host {
+        names.push(format!("_meow-links.{}", host));
+    }
+    for name in names {
+        let lookup: TxtLookup =
+            match tokio::time::timeout(Duration::from_secs(4), resolver.txt_lookup(name)).await {
+                Ok(Ok(v)) => v,
+                _ => continue,
+            };
+        for txt in lookup.iter() {
+            for data in txt.txt_data() {
+                if let Ok(text) = std::str::from_utf8(data) {
+                    if text.contains(token) {
+                        return true;
+                    }
                 }
             }
         }
     }
     false
+}
+
+fn meta_token_match(body: &str, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let mut cursor = body;
+    loop {
+        let Some(pos) = cursor.find("<meta") else {
+            return false;
+        };
+        cursor = &cursor[pos + 5..];
+        let Some(end) = cursor.find('>') else {
+            return false;
+        };
+        let tag = &cursor[..end];
+        let tag_lower = tag.to_lowercase();
+        let has_name = tag_lower.contains("name=\"meow-links\"")
+            || tag_lower.contains("name='meow-links'")
+            || tag_lower.contains("name=\"meow-links-token\"")
+            || tag_lower.contains("name='meow-links-token'");
+        if has_name
+            && (tag.contains(&format!("content=\"{}\"", token))
+                || tag.contains(&format!("content='{}'", token)))
+        {
+            return true;
+        }
+        cursor = &cursor[end..];
+    }
 }
 
 fn generate_verify_token() -> String {

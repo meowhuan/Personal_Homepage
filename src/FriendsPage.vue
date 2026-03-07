@@ -6,7 +6,8 @@ const APPLY_API_URL = "https://m.ratf.cn/links/apply";
 const APPLY_CONFIG_URL = "https://m.ratf.cn/links/apply/config";
 const VERIFY_HTTP_URL = "https://m.ratf.cn/links/verify/http";
 const VERIFY_EMAIL_SEND_URL = "https://m.ratf.cn/links/verify/email/send";
-const CAPTCHA_CONTAINER_ID = "friend-link-captcha";
+const APPLY_CAPTCHA_CONTAINER_ID = "friend-link-captcha";
+const EMAIL_CAPTCHA_CONTAINER_ID = "friend-link-email-captcha";
 
 const isNight = ref(false);
 const themeMedia = ref(null);
@@ -36,7 +37,8 @@ const applyConfig = reactive({
   captcha_site_key: "",
   captcha_secret_set: true
 });
-const captchaWidgetId = ref(null);
+const applyCaptchaWidgetId = ref(null);
+const emailCaptchaWidgetId = ref(null);
 
 const form = reactive({
   site_name: "",
@@ -120,7 +122,7 @@ const submitApply = async () => {
     return;
   }
 
-  const captchaToken = getCaptchaToken();
+  const captchaToken = getCaptchaToken("email");
   if (applyConfig.captcha_enabled && !captchaToken) {
     submitError.value = "请先完成人机验证。";
     return;
@@ -154,7 +156,7 @@ const submitApply = async () => {
     verifyHint.verify_token = String(data?.verify_token || "");
     verifyHint.verify_deadline = Number(data?.verify_deadline || 0) || 0;
     resetForm();
-    resetCaptcha();
+    resetCaptcha("apply");
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : "提交失败，请稍后再试。";
   } finally {
@@ -190,7 +192,7 @@ const sendVerifyEmail = async () => {
   if (!verifyHint.application_id || verifyHint.actionLoading) return;
   verifyHint.actionLoading = true;
   submitError.value = "";
-  const captchaToken = getCaptchaToken();
+  const captchaToken = getCaptchaToken("apply");
   if (applyConfig.captcha_enabled && !captchaToken) {
     submitError.value = "请先完成人机验证。";
     verifyHint.actionLoading = false;
@@ -220,7 +222,7 @@ const sendVerifyEmail = async () => {
     openModal("发送失败", submitError.value);
   } finally {
     verifyHint.actionLoading = false;
-    resetCaptcha();
+    resetCaptcha("email");
   }
 };
 
@@ -234,23 +236,36 @@ const closeModal = () => {
   modal.open = false;
 };
 
-const getCaptchaToken = () => {
+const getCaptchaToken = (target) => {
   if (!applyConfig.captcha_enabled) return "";
   if (applyConfig.captcha_provider === "turnstile") {
-    return (window.turnstile?.getResponse?.(captchaWidgetId.value) || "").trim();
+    const widgetId = target === "email" ? emailCaptchaWidgetId.value : applyCaptchaWidgetId.value;
+    return (window.turnstile?.getResponse?.(widgetId) || "").trim();
   }
   if (applyConfig.captcha_provider === "hcaptcha") {
-    return (window.hcaptcha?.getResponse?.(captchaWidgetId.value) || "").trim();
+    const widgetId = target === "email" ? emailCaptchaWidgetId.value : applyCaptchaWidgetId.value;
+    return (window.hcaptcha?.getResponse?.(widgetId) || "").trim();
   }
   return "";
 };
 
-const resetCaptcha = () => {
-  if (!applyConfig.captcha_enabled || captchaWidgetId.value == null) return;
-  if (applyConfig.captcha_provider === "turnstile") {
-    window.turnstile?.reset?.(captchaWidgetId.value);
-  } else if (applyConfig.captcha_provider === "hcaptcha") {
-    window.hcaptcha?.reset?.(captchaWidgetId.value);
+const resetCaptcha = (target) => {
+  if (!applyConfig.captcha_enabled) return;
+  const resetOne = (widgetId) => {
+    if (widgetId == null) return;
+    if (applyConfig.captcha_provider === "turnstile") {
+      window.turnstile?.reset?.(widgetId);
+    } else if (applyConfig.captcha_provider === "hcaptcha") {
+      window.hcaptcha?.reset?.(widgetId);
+    }
+  };
+  if (target === "apply") {
+    resetOne(applyCaptchaWidgetId.value);
+  } else if (target === "email") {
+    resetOne(emailCaptchaWidgetId.value);
+  } else {
+    resetOne(applyCaptchaWidgetId.value);
+    resetOne(emailCaptchaWidgetId.value);
   }
 };
 
@@ -273,24 +288,32 @@ const ensureCaptchaScript = async (provider) => {
   });
 };
 
-const renderCaptchaWidget = async () => {
+const renderCaptchaWidget = async (containerId, widgetRef) => {
   if (!applyConfig.captcha_enabled || !applyConfig.captcha_provider || !applyConfig.captcha_site_key) return;
-  const container = document.getElementById(CAPTCHA_CONTAINER_ID);
-  if (!container) return;
+  const container = document.getElementById(containerId);
+  if (!container) {
+    widgetRef.value = null;
+    return;
+  }
   container.innerHTML = "";
-  captchaWidgetId.value = null;
+  widgetRef.value = null;
   await ensureCaptchaScript(applyConfig.captcha_provider);
   if (applyConfig.captcha_provider === "turnstile" && window.turnstile?.render) {
-    captchaWidgetId.value = window.turnstile.render(`#${CAPTCHA_CONTAINER_ID}`, {
+    widgetRef.value = window.turnstile.render(`#${containerId}`, {
       sitekey: applyConfig.captcha_site_key,
       theme: isNight.value ? "dark" : "light"
     });
   } else if (applyConfig.captcha_provider === "hcaptcha" && window.hcaptcha?.render) {
-    captchaWidgetId.value = window.hcaptcha.render(CAPTCHA_CONTAINER_ID, {
+    widgetRef.value = window.hcaptcha.render(containerId, {
       sitekey: applyConfig.captcha_site_key,
       theme: isNight.value ? "dark" : "light"
     });
   }
+};
+
+const renderCaptchaWidgets = async () => {
+  await renderCaptchaWidget(APPLY_CAPTCHA_CONTAINER_ID, applyCaptchaWidgetId);
+  await renderCaptchaWidget(EMAIL_CAPTCHA_CONTAINER_ID, emailCaptchaWidgetId);
 };
 
 const loadApplyConfig = async () => {
@@ -302,7 +325,7 @@ const loadApplyConfig = async () => {
     applyConfig.captcha_provider = String(cfg?.captcha_provider || "").trim();
     applyConfig.captcha_site_key = String(cfg?.captcha_site_key || "").trim();
     applyConfig.captcha_secret_set = cfg?.captcha_secret_set !== false;
-    await renderCaptchaWidget();
+    await renderCaptchaWidgets();
   } catch {
     applyConfig.captcha_enabled = false;
     applyConfig.captcha_provider = "";
@@ -374,7 +397,16 @@ watch(
   async () => {
     if (!applyConfig.captcha_enabled) return;
     await nextTick();
-    await renderCaptchaWidget();
+    await renderCaptchaWidgets();
+  }
+);
+
+watch(
+  () => verifyHint.application_id,
+  async (value) => {
+    if (!value || !applyConfig.captcha_enabled) return;
+    await nextTick();
+    await renderCaptchaWidget(EMAIL_CAPTCHA_CONTAINER_ID, emailCaptchaWidgetId);
   }
 );
 
@@ -559,7 +591,7 @@ onBeforeUnmount(() => {
                 class="rounded-2xl border p-3"
                 :class="isNight ? 'border-meow-night-line bg-meow-night-bg/40' : 'border-meow-line bg-white/50'"
               >
-                <div :id="CAPTCHA_CONTAINER_ID"></div>
+                <div :id="APPLY_CAPTCHA_CONTAINER_ID"></div>
                 <p class="mt-2 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                   已启用人机验证，请完成后提交。
                 </p>
@@ -626,6 +658,16 @@ onBeforeUnmount(() => {
                 >
                   {{ verifyHint.actionLoading ? "处理中..." : "我已完成HTTP验证" }}
                 </button>
+                <div
+                  v-if="applyConfig.captcha_enabled"
+                  class="w-full rounded-2xl border p-3"
+                  :class="isNight ? 'border-meow-night-line bg-meow-night-bg/40' : 'border-meow-line bg-white/50'"
+                >
+                  <div :id="EMAIL_CAPTCHA_CONTAINER_ID"></div>
+                  <p class="mt-2 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                    邮箱验证需单独完成人机验证。
+                  </p>
+                </div>
                 <button
                   type="button"
                   class="meow-btn-ghost"
