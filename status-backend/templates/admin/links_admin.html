@@ -123,7 +123,7 @@
                 <strong>待验证申请</strong>
                 <span class="small" id="verify-count"></span>
               </div>
-              <div class="small">仅显示 `verify_pending`，可重置验证 token 与有效期。</div>
+              <div class="small">仅显示 `verify_pending`，可重置验证 token，或手动放行进入自动审查。</div>
               <div id="verify-list" class="list"></div>
               <div style="margin-top:10px;">
                 <strong>操作状态与日志</strong>
@@ -200,7 +200,7 @@
             <hr style="margin: 14px 0; border: 0; border-top: 1px dashed rgba(234, 219, 234, 0.9);" />
             <strong>申请风控配置</strong>
             <div class="small" style="margin-top:6px;">
-              Captcha Secret 留空不改，输入 `-` 表示清空。Captcha Site Key 会公开给申请页前端使用。
+              Captcha Secret 留空不改，输入 `-` 表示清空。Captcha Site Key 会公开给申请页前端使用；ALTCHA 可不填 Secret。
             </div>
             <div class="grid-2" style="margin-top:10px;">
               <div>
@@ -209,11 +209,12 @@
                   <option value="">关闭</option>
                   <option value="turnstile">Turnstile</option>
                   <option value="hcaptcha">hCaptcha</option>
+                  <option value="altcha">ALTCHA</option>
                 </select>
               </div>
               <div>
-                <label>Captcha Site Key</label>
-                <input id="captcha_site_key" type="text" placeholder="前端公开 Site Key" />
+                <label>Captcha Site Key / Challenge URL</label>
+                <input id="captcha_site_key" type="text" placeholder="Turnstile/hCaptcha 填 Site Key；ALTCHA 填 challenge URL" />
               </div>
               <div>
                 <label>Captcha Secret（留空不改，输入 `-` 清空）</label>
@@ -246,6 +247,10 @@
               <div>
                 <label>申请域名黑名单（逗号分隔）</label>
                 <input id="apply_deny_hosts" type="text" placeholder="如：aliyun.com,qq.com,baidu.com" />
+              </div>
+              <div>
+                <label>可通性检测白名单（逗号分隔）</label>
+                <input id="unreachable_whitelist_hosts" type="text" placeholder="如：example.com,blog.example.com" />
               </div>
               <div>
                 <label>验证窗口（分钟）</label>
@@ -338,6 +343,7 @@
           block_disposable_email: document.getElementById("block_disposable_email").checked,
           block_edu_gov_email: document.getElementById("block_edu_gov_email").checked,
           apply_deny_hosts: document.getElementById("apply_deny_hosts").value.trim(),
+          unreachable_whitelist_hosts: document.getElementById("unreachable_whitelist_hosts").value.trim(),
           verify_window_minutes: Number(document.getElementById("verify_window_minutes").value || 0) || null,
           public_base_url: document.getElementById("public_base_url").value.trim()
         };
@@ -365,6 +371,7 @@
         document.getElementById("block_disposable_email").checked = cfg.block_disposable_email !== false;
         document.getElementById("block_edu_gov_email").checked = cfg.block_edu_gov_email !== false;
         document.getElementById("apply_deny_hosts").value = cfg.apply_deny_hosts || "";
+        document.getElementById("unreachable_whitelist_hosts").value = cfg.unreachable_whitelist_hosts || "";
         document.getElementById("verify_window_minutes").value = Number(cfg.verify_window_minutes || 120);
         document.getElementById("public_base_url").value = cfg.public_base_url || "";
       };
@@ -458,6 +465,7 @@
             <div class="toolbar" style="margin-bottom:0;">
               <button class="ghost" data-copy-token>复制 token</button>
               <button class="ok" data-reset-verify>重置验证</button>
+              <button class="ok" data-release-verify>放行自动审查</button>
             </div>
           `;
           wrap.querySelector("[data-copy-token]").addEventListener("click", async () => {
@@ -496,6 +504,25 @@
               setStatus(data.message || "验证已重置");
             } catch (err) {
               setStatus(err.message || "重置验证失败");
+            }
+          });
+          wrap.querySelector("[data-release-verify]").addEventListener("click", async () => {
+            if (!confirm("确认跳过验证并放行进入自动审查吗？")) return;
+            try {
+              setStatus("手动放行中...");
+              const res = await fetch(api("/links/verify/release"), {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({ application_id: item.id })
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                throw new Error(data.message || "放行失败");
+              }
+              await loadApplications();
+              setStatus(data.message || "已手动放行");
+            } catch (err) {
+              setStatus(err.message || "放行失败");
             }
           });
           verifyListEl.appendChild(wrap);

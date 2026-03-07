@@ -55,11 +55,13 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 
 ### 友链风控 / Link Anti-abuse
 
-- `LINK_CAPTCHA_PROVIDER` (optional: `none`/`turnstile`/`hcaptcha`, default `none`)
+- `LINK_CAPTCHA_PROVIDER` (optional: `none`/`turnstile`/`hcaptcha`/`altcha`, default `none`)
 - `LINK_TURNSTILE_SITE_KEY` (required if provider is `turnstile`)
 - `LINK_TURNSTILE_SECRET` (required if provider is `turnstile`)
 - `LINK_HCAPTCHA_SITE_KEY` (required if provider is `hcaptcha`)
 - `LINK_HCAPTCHA_SECRET` (required if provider is `hcaptcha`)
+- `LINK_ALTCHA_CHALLENGE_URL` (required if provider is `altcha`, Sentinel challenge URL)
+- `LINK_ALTCHA_SECRET` (optional if provider is `altcha`, used only for library verification)
 - `LINK_APPLY_RATE_LIMIT_WINDOW_SEC` (optional, default `3600`)
 - `LINK_APPLY_RATE_LIMIT_MAX` (optional, default `3`, per IP)
 - `LINK_APPLY_RATE_LIMIT_PREFIX_MAX` (optional, default `8`, per IP prefix)
@@ -85,6 +87,7 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 - `LINK_BACKLINK_TARGET` (optional, backlink target, default `https://www.meowra.cn/`)
 - `LINK_BACKLINK_ENFORCE_HOURS` (optional, default `24`)
 - `LINK_UNREACHABLE_ENFORCE_HOURS` (optional, default `72`)
+- 可通性白名单：管理后台字段 `可通性检测白名单`（设置项 `unreachable_whitelist_hosts`）。
 
 ## 鉴权 / Auth
 
@@ -119,6 +122,7 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 - `POST /links/verify/email/send` (public verify)
 - `GET /links/verify/email?token=...` (public verify)
 - `POST /links/verify/reset` (token)
+- `POST /links/verify/release` (token)
 - `GET /links/applications` (token)
 - `POST /links/review` (token)
 - `POST /links/review/stage/cancel` (token, skip backlink stage)
@@ -142,12 +146,14 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
   Devices are marked offline after 5 minutes without heartbeat.
 - 开启全局手动离线后，`/heartbeat` 直接返回 `200` 且不更新设备状态。
   When global manual-offline is enabled, `/heartbeat` returns `200` without updating status.
-- `POST /links/apply` 的 `verify_status` 初始为 `verify_pending`，完成 HTTP / DNS TXT / 首页 meta / 邮箱验证任意一种后进入 `pending` 审核队列。
-  `POST /links/apply` starts as `verify_pending`; HTTP / DNS TXT / homepage meta / email verify moves it to `pending`.
+- `POST /links/apply` 的 `verify_status` 初始为 `verify_pending`，完成 HTTP / DNS TXT / 首页 meta / 邮箱验证任意一种后进入 `pending` 审核队列。也可通过 `POST /links/verify/release` 手动放行未验证申请进入自动审查。
+  `POST /links/apply` starts as `verify_pending`; HTTP / DNS TXT / homepage meta / email verify moves it to `pending`. `POST /links/verify/release` can manually move unverified applications into auto-review.
 - 公网后端不主动抓取外站，审查与回链检查由内网 `review-reporter` 完成。
   Public backend does not crawl external sites; review/backlink checks are done by internal `review-reporter`.
 - 若申请记录包含 `email` 且 SMTP 可用，审核结果会自动邮件通知申请者。
   If an application has `email` and SMTP is configured, review results are emailed automatically.
+- 72h 可通性检测支持白名单（管理后台 `可通性检测白名单`）。
+  Unreachable removal supports a whitelist (admin setting: Unreachable whitelist).
 
 ## 内网审查计算 / Internal Review Scoring
 

@@ -221,6 +221,11 @@ struct CaptchaVerifyResponse {
     success: bool,
 }
 
+#[derive(Deserialize)]
+struct AltchaVerifyResponse {
+    verified: bool,
+}
+
 #[derive(Serialize)]
 struct ApiMessage {
     message: String,
@@ -261,6 +266,11 @@ struct LinkVerifyEmailSendPayload {
 
 #[derive(Deserialize)]
 struct LinkVerifyResetPayload {
+    application_id: i64,
+}
+
+#[derive(Deserialize)]
+struct LinkVerifyReleasePayload {
     application_id: i64,
 }
 
@@ -334,6 +344,7 @@ struct LinkSettingsResponse {
     apply_deny_hosts: Option<String>,
     verify_window_minutes: i64,
     public_base_url: Option<String>,
+    unreachable_whitelist_hosts: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -360,6 +371,7 @@ struct LinkSettingsPayload {
     apply_deny_hosts: Option<String>,
     verify_window_minutes: Option<i64>,
     public_base_url: Option<String>,
+    unreachable_whitelist_hosts: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -422,6 +434,7 @@ struct ReviewTasksResponse {
     backlink_target: String,
     backlink_enforce_hours: i64,
     unreachable_enforce_hours: i64,
+    unreachable_whitelist: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -504,6 +517,7 @@ struct CaptchaConfig {
 enum CaptchaProvider {
     Turnstile,
     Hcaptcha,
+    Altcha,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -740,6 +754,7 @@ async fn main() {
         .route("/links/verify/email/send", post(links_verify_email_send))
         .route("/links/verify/email", get(links_verify_email))
         .route("/links/verify/reset", post(links_verify_reset))
+        .route("/links/verify/release", post(links_verify_release))
         .route("/links/applications", get(links_applications))
         .route("/links/review", post(links_review))
         .route("/links/sort", post(links_sort))
@@ -2235,6 +2250,84 @@ async fn links_verify_reset(
         .into_response()
 }
 
+async fn links_verify_release(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkVerifyReleasePayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let now = now_ts();
+    let (status, existing_note) = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT status, review_note FROM friend_link_applications WHERE id = ?1",
+            params![payload.application_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .ok()
+        .unwrap_or_else(|| ("".to_string(), None))
+    };
+    if status.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                message: "申请不存在".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if status == "pending" {
+        return (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: "该申请已在审核队列中".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if status != "verify_pending" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该申请当前不可放行".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let manual_note = "手动放行未验证申请，进入自动审查队列";
+    let merged_note = match normalize_optional(existing_note, 520) {
+        Some(existing) => format!("{}\n{}", existing, manual_note),
+        None => manual_note.to_string(),
+    };
+
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE friend_link_applications
+             SET status = 'pending',
+                 review_note = ?1,
+                 verify_token = NULL,
+                 verify_deadline = NULL,
+                 verify_http_at = NULL,
+                 verify_email_at = NULL,
+                 updated_at = ?2
+             WHERE id = ?3 AND status = 'verify_pending'",
+            params![merged_note, now, payload.application_id],
+        );
+    }
+
+    (
+        StatusCode::OK,
+        Json(ApiMessage {
+            message: "已手动放行，进入自动审查队列".to_string(),
+        }),
+    )
+        .into_response()
+}
+
 async fn links_applications(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2520,6 +2613,9 @@ async fn links_review_report_tasks(
         rows.filter_map(Result::ok).collect::<Vec<_>>()
     };
 
+    let unreachable_whitelist_raw = read_setting(&conn, "unreachable_whitelist_hosts");
+    let unreachable_whitelist = parse_host_list(unreachable_whitelist_raw);
+
     (
         StatusCode::OK,
         Json(ReviewTasksResponse {
@@ -2535,6 +2631,7 @@ async fn links_review_report_tasks(
                 .ok()
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(72),
+            unreachable_whitelist,
         }),
     )
         .into_response()
@@ -2605,7 +2702,7 @@ async fn perform_review_decision(
         };
         let app_row = tx
             .query_row(
-                "SELECT site_name, site_url, avatar_url, description, email, review_note
+                "SELECT site_name, site_url, avatar_url, description, email, status, review_note
                  FROM friend_link_applications WHERE id = ?1",
                 params![payload.application_id],
                 |row| {
@@ -2615,16 +2712,28 @@ async fn perform_review_decision(
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, Option<String>>(4)?,
-                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
             .ok();
-        let (site_name, site_url, avatar_url, description, applicant_email, existing_review_note) =
+        let (
+            site_name,
+            site_url,
+            avatar_url,
+            description,
+            applicant_email,
+            status,
+            existing_review_note,
+        ) =
             match app_row {
                 Some(v) => v,
                 None => return Err("申请记录不存在".to_string()),
             };
+        if action == "approve" && status == "verify_pending" {
+            return Err("该申请尚未验证，请先验证或手动放行进入自动审查".to_string());
+        }
         let existing_review_note = normalize_optional(existing_review_note, 560);
         let final_review_note = match (existing_review_note, incoming_review_note.clone()) {
             (Some(existing), Some(incoming)) => {
@@ -3164,6 +3273,12 @@ async fn links_settings_set(
                 .public_base_url
                 .map(|v| v.trim().chars().take(255).collect::<String>()),
         ),
+        (
+            "unreachable_whitelist_hosts",
+            payload
+                .unreachable_whitelist_hosts
+                .map(|v| v.trim().chars().take(1024).collect::<String>()),
+        ),
     ];
     for (key, value) in updates {
         if let Some(value) = value {
@@ -3213,10 +3328,14 @@ async fn links_apply_config(State(state): State<AppState>) -> impl IntoResponse 
         let site_key = read_setting(&conn, "captcha_site_key")
             .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.site_key.clone()))
             .unwrap_or_default();
-        let secret_set = read_setting(&conn, "captcha_secret")
-            .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.secret.clone()))
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+        let secret_set = if provider.trim().eq_ignore_ascii_case("altcha") {
+            true
+        } else {
+            read_setting(&conn, "captcha_secret")
+                .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.secret.clone()))
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+        };
         (provider, site_key, secret_set)
     };
     let provider = provider.trim().to_string();
@@ -3790,9 +3909,22 @@ impl AntiAbuseConfig {
                 normalize_env("LINK_HCAPTCHA_SITE_KEY"),
                 normalize_env("LINK_HCAPTCHA_SECRET"),
             ),
+            Some(CaptchaProvider::Altcha) => (
+                normalize_env("LINK_ALTCHA_CHALLENGE_URL"),
+                normalize_env("LINK_ALTCHA_SECRET"),
+            ),
             None => (None, None),
         };
         let captcha = match (provider, site_key, secret) {
+            (Some(CaptchaProvider::Altcha), Some(site_key), secret) => {
+                let verify_url = altcha_verify_url(&site_key).unwrap_or_default();
+                Some(CaptchaConfig {
+                    provider: CaptchaProvider::Altcha,
+                    site_key,
+                    secret: secret.unwrap_or_default(),
+                    verify_url,
+                })
+            }
             (Some(provider), Some(site_key), Some(secret)) => Some(CaptchaConfig {
                 provider,
                 site_key,
@@ -3899,6 +4031,7 @@ impl CaptchaProvider {
         match raw.trim().to_lowercase().as_str() {
             "turnstile" => Some(Self::Turnstile),
             "hcaptcha" => Some(Self::Hcaptcha),
+            "altcha" => Some(Self::Altcha),
             _ => None,
         }
     }
@@ -3907,6 +4040,7 @@ impl CaptchaProvider {
         match self {
             Self::Turnstile => "turnstile",
             Self::Hcaptcha => "hcaptcha",
+            Self::Altcha => "altcha",
         }
     }
 
@@ -3914,8 +4048,17 @@ impl CaptchaProvider {
         match self {
             Self::Turnstile => "https://challenges.cloudflare.com/turnstile/v0/siteverify",
             Self::Hcaptcha => "https://hcaptcha.com/siteverify",
+            Self::Altcha => "",
         }
     }
+}
+
+fn altcha_verify_url(challenge_url: &str) -> Option<String> {
+    let mut url = Url::parse(challenge_url).ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    url.set_path("/v1/verify/signature");
+    Some(url.to_string())
 }
 
 async fn verify_captcha(config: &CaptchaConfig, token: &str, remote_ip: Option<&str>) -> bool {
@@ -3926,22 +4069,49 @@ async fn verify_captcha(config: &CaptchaConfig, token: &str, remote_ip: Option<&
         Ok(c) => c,
         Err(_) => return false,
     };
-    let mut params: Vec<(&str, &str)> = vec![("secret", config.secret.as_str()), ("response", token)];
-    if let Some(ip) = remote_ip {
-        if !ip.is_empty() {
-            params.push(("remoteip", ip));
+    match config.provider {
+        CaptchaProvider::Turnstile | CaptchaProvider::Hcaptcha => {
+            let mut params: Vec<(&str, &str)> =
+                vec![("secret", config.secret.as_str()), ("response", token)];
+            if let Some(ip) = remote_ip {
+                if !ip.is_empty() {
+                    params.push(("remoteip", ip));
+                }
+            }
+            let resp = match client.post(&config.verify_url).form(&params).send().await {
+                Ok(r) => r,
+                Err(_) => return false,
+            };
+            if !resp.status().is_success() {
+                return false;
+            }
+            match resp.json::<CaptchaVerifyResponse>().await {
+                Ok(body) => body.success,
+                Err(_) => false,
+            }
         }
-    }
-    let resp = match client.post(&config.verify_url).form(&params).send().await {
-        Ok(r) => r,
-        Err(_) => return false,
-    };
-    if !resp.status().is_success() {
-        return false;
-    }
-    match resp.json::<CaptchaVerifyResponse>().await {
-        Ok(body) => body.success,
-        Err(_) => false,
+        CaptchaProvider::Altcha => {
+            let payload = token.trim();
+            if payload.is_empty() || config.verify_url.trim().is_empty() {
+                return false;
+            }
+            let resp = match client
+                .post(&config.verify_url)
+                .json(&serde_json::json!({ "payload": payload }))
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => return false,
+            };
+            if !resp.status().is_success() {
+                return false;
+            }
+            match resp.json::<AltchaVerifyResponse>().await {
+                Ok(body) => body.verified,
+                Err(_) => false,
+            }
+        }
     }
 }
 
@@ -3997,6 +4167,7 @@ fn default_deny_hosts() -> HashSet<String> {
         "cloud.tencent.com",
         "cloudflare.com",
         "openai.com",
+        "123pan.com",
         "bit.ly",
         "t.co",
         "tinyurl.com",
@@ -4015,6 +4186,15 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
     let secret = read_setting(conn, "captcha_secret")
         .or_else(|| defaults.captcha.as_ref().map(|cfg| cfg.secret.clone()));
     let captcha = match (provider, site_key, secret) {
+        (Some(CaptchaProvider::Altcha), Some(site_key), secret) => {
+            let verify_url = altcha_verify_url(&site_key).unwrap_or_default();
+            Some(CaptchaConfig {
+                provider: CaptchaProvider::Altcha,
+                site_key,
+                secret: secret.unwrap_or_default(),
+                verify_url,
+            })
+        }
         (Some(provider), Some(site_key), Some(secret)) => Some(CaptchaConfig {
             provider,
             site_key,
@@ -4257,6 +4437,7 @@ fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSett
         apply_deny_hosts: anti.deny_hosts_raw.clone(),
         verify_window_minutes: (anti.verify_window_secs / 60).max(10),
         public_base_url: anti.public_base_url.clone(),
+        unreachable_whitelist_hosts: read_setting(conn, "unreachable_whitelist_hosts"),
     }
 }
 
@@ -4292,6 +4473,7 @@ fn is_disallowed_link_host(site_url: &str, anti_abuse: &AntiAbuseConfig) -> bool
         "tencent",
         "wechat",
         "weixin",
+        "123pan",
     ];
     if unreasonable_keywords.iter().any(|k| host.contains(k)) {
         return true;
@@ -4307,6 +4489,21 @@ fn normalize_host(raw: &str) -> String {
         .trim_start_matches('.')
         .trim_start_matches("www.")
         .to_lowercase()
+}
+
+fn parse_host_list(raw: Option<String>) -> Vec<String> {
+    let mut out = HashSet::new();
+    if let Some(raw) = raw {
+        for host in raw.split(|c| c == ',' || c == '，' || c == ';' || c == '；') {
+            let normalized = normalize_host(host);
+            if !normalized.is_empty() {
+                out.insert(normalized);
+            }
+        }
+    }
+    let mut list: Vec<String> = out.into_iter().collect();
+    list.sort();
+    list
 }
 
 fn is_valid_email_address(email: &str) -> bool {

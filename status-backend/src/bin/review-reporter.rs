@@ -17,6 +17,7 @@ struct ReviewTasksResponse {
     backlink_target: String,
     backlink_enforce_hours: i64,
     unreachable_enforce_hours: i64,
+    unreachable_whitelist: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -256,6 +257,11 @@ async fn run_once_cycle(
                 state.unreachable_since.remove(&link.id);
                 continue;
             }
+        }
+
+        if is_unreachable_whitelisted(&link.url, &tasks.unreachable_whitelist) {
+            state.unreachable_since.remove(&link.id);
+            continue;
         }
 
         if accessible {
@@ -1038,6 +1044,29 @@ fn is_disallowed_public_service_domain(site_url: &str) -> bool {
         }
         None => false,
     }
+}
+
+fn normalize_host(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('.')
+        .trim_start_matches("www.")
+        .to_lowercase()
+}
+
+fn is_unreachable_whitelisted(site_url: &str, whitelist: &[String]) -> bool {
+    if whitelist.is_empty() {
+        return false;
+    }
+    let host = Url::parse(site_url)
+        .ok()
+        .and_then(|url| url.host_str().map(normalize_host))
+        .unwrap_or_default();
+    if host.is_empty() {
+        return false;
+    }
+    whitelist
+        .iter()
+        .any(|rule| host == *rule || host.ends_with(&format!(".{}", rule)))
 }
 
 fn is_valid_http_url(value: &str) -> bool {

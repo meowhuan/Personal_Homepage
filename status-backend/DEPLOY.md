@@ -44,6 +44,14 @@ STATUS_BUILD=status-backend v1.x
 RUST_LOG=info
 ```
 
+### 3.1 ALTCHA 部署 / ALTCHA Setup
+
+1. 准备 Sentinel 并创建 API Key。Widget 需要 `challengeurl` 指向 Sentinel 的 `/v1/challenge`，并携带 `apiKey` 参数（形如 `https://sentinel.example.com/v1/challenge?apiKey=key_...`）。
+2. 后台配置方式（二选一）：
+   - 管理后台：`Captcha Provider` 选 `ALTCHA`，`Captcha Site Key / Challenge URL` 填上一步的 `challengeurl`。
+   - 环境变量：`LINK_CAPTCHA_PROVIDER=altcha`，`LINK_ALTCHA_CHALLENGE_URL=<challengeurl>`。
+3. 本后端使用 ALTCHA 的 `POST /v1/verify/signature` HTTP API 验证 payload；响应中 `verified: true` 即验证通过。
+
 ## 4) 构建与运行 / Build & Run
 
 ```bash

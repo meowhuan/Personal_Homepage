@@ -39,6 +39,8 @@ const applyConfig = reactive({
 });
 const applyCaptchaWidgetId = ref(null);
 const emailCaptchaWidgetId = ref(null);
+const applyAltchaPayload = ref("");
+const emailAltchaPayload = ref("");
 
 const form = reactive({
   site_name: "",
@@ -247,6 +249,9 @@ const closeModal = () => {
 
 const getCaptchaToken = (target) => {
   if (!applyConfig.captcha_enabled) return "";
+  if (applyConfig.captcha_provider === "altcha") {
+    return target === "email" ? emailAltchaPayload.value : applyAltchaPayload.value;
+  }
   if (applyConfig.captcha_provider === "turnstile") {
     const widgetId = target === "email" ? emailCaptchaWidgetId.value : applyCaptchaWidgetId.value;
     return (window.turnstile?.getResponse?.(widgetId) || "").trim();
@@ -260,6 +265,23 @@ const getCaptchaToken = (target) => {
 
 const resetCaptcha = (target) => {
   if (!applyConfig.captcha_enabled) return;
+  if (applyConfig.captcha_provider === "altcha") {
+    const clearPayload = (refValue) => {
+      refValue.value = "";
+    };
+    if (target === "apply") {
+      clearPayload(applyAltchaPayload);
+      void renderCaptchaWidget(APPLY_CAPTCHA_CONTAINER_ID, applyCaptchaWidgetId);
+    } else if (target === "email") {
+      clearPayload(emailAltchaPayload);
+      void renderCaptchaWidget(EMAIL_CAPTCHA_CONTAINER_ID, emailCaptchaWidgetId);
+    } else {
+      clearPayload(applyAltchaPayload);
+      clearPayload(emailAltchaPayload);
+      void renderCaptchaWidgets();
+    }
+    return;
+  }
   const resetOne = (widgetId) => {
     if (widgetId == null) return;
     if (applyConfig.captcha_provider === "turnstile") {
@@ -280,15 +302,24 @@ const resetCaptcha = (target) => {
 
 const ensureCaptchaScript = async (provider) => {
   if (!provider) return;
-  const scriptId = provider === "turnstile" ? "captcha-turnstile-js" : "captcha-hcaptcha-js";
+  const scriptId = provider === "turnstile"
+    ? "captcha-turnstile-js"
+    : provider === "hcaptcha"
+      ? "captcha-hcaptcha-js"
+      : "captcha-altcha-js";
   if (document.getElementById(scriptId)) return;
   const src = provider === "turnstile"
     ? "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
-    : "https://js.hcaptcha.com/1/api.js?render=explicit";
+    : provider === "hcaptcha"
+      ? "https://js.hcaptcha.com/1/api.js?render=explicit"
+      : "https://cdn.jsdelivr.net/gh/altcha-org/altcha/dist/altcha.min.js";
   await new Promise((resolve, reject) => {
     const script = document.createElement("script");
     script.id = scriptId;
     script.src = src;
+    if (provider === "altcha") {
+      script.type = "module";
+    }
     script.async = true;
     script.defer = true;
     script.onload = resolve;
@@ -317,6 +348,28 @@ const renderCaptchaWidget = async (containerId, widgetRef) => {
       sitekey: applyConfig.captcha_site_key,
       theme: isNight.value ? "dark" : "light"
     });
+  } else if (applyConfig.captcha_provider === "altcha") {
+    const widget = document.createElement("altcha-widget");
+    widget.setAttribute("challengeurl", applyConfig.captcha_site_key);
+    widget.setAttribute("name", containerId === EMAIL_CAPTCHA_CONTAINER_ID ? "altcha-email" : "altcha-apply");
+    widget.addEventListener("statechange", (event) => {
+      const detail = event?.detail || {};
+      const payload = typeof detail.payload === "string" ? detail.payload.trim() : "";
+      if (payload) {
+        if (containerId === EMAIL_CAPTCHA_CONTAINER_ID) {
+          emailAltchaPayload.value = payload;
+        } else {
+          applyAltchaPayload.value = payload;
+        }
+      } else if (detail.state && detail.state !== "verified") {
+        if (containerId === EMAIL_CAPTCHA_CONTAINER_ID) {
+          emailAltchaPayload.value = "";
+        } else {
+          applyAltchaPayload.value = "";
+        }
+      }
+    });
+    container.appendChild(widget);
   }
 };
 
