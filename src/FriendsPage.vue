@@ -538,10 +538,10 @@ onBeforeUnmount(() => {
             >
               <div class="font-700" :class="isNight ? 'text-meow-night-ink' : 'text-meow-ink'">验证声明</div>
               <div class="mt-1">申请提交后不会立即进入审核，需先完成以下任一验证：</div>
-              <div>1. HTTP 验证：在站点 `/.well-known/meow-links.txt` 写入 token；</div>
-              <div>2. DNS 验证：添加 TXT 记录 `_meow-links`，值包含 token；</div>
-              <div>3. Meta 验证：首页 `&lt;head&gt;` 加入 `&lt;meta name="meow-links" content="TOKEN"&gt;`（TOKEN 为下方提供的验证 token）；</div>
-              <div>4. 邮箱验证：向申请邮箱发送验证链接并点击确认。</div>
+              <div>1. 邮箱验证（推荐）：向申请邮箱发送验证链接并点击确认。</div>
+              <div>2. HTTP 验证：在站点 `/.well-known/meow-links.txt` 写入 token；</div>
+              <div>3. DNS 验证：添加 TXT 记录 `_meow-links`，值包含 token；</div>
+              <div>4. Meta 验证：首页 `&lt;head&gt;` 加入 `&lt;meta name="meow-links" content="TOKEN"&gt;`（TOKEN 为下方提供的验证 token）。</div>
             </div>
             <form class="mt-4 space-y-3" @submit.prevent="submitApply">
               <input
@@ -658,15 +658,6 @@ onBeforeUnmount(() => {
                 验证有效期至：{{ new Date(verifyHint.verify_deadline * 1000).toLocaleString("zh-CN") }}
               </p>
               <div class="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  class="meow-btn-ghost"
-                  :disabled="verifyHint.actionLoading"
-                  :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
-                  @click="triggerHttpVerify"
-                >
-                  {{ verifyHint.actionLoading ? "处理中..." : "我已完成HTTP验证" }}
-                </button>
                 <div
                   v-if="applyConfig.captcha_enabled"
                   class="w-full rounded-2xl border p-3"
@@ -684,7 +675,16 @@ onBeforeUnmount(() => {
                   :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
                   @click="sendVerifyEmail"
                 >
-                  发送邮箱验证链接
+                  发送邮箱验证链接（推荐）
+                </button>
+                <button
+                  type="button"
+                  class="meow-btn-ghost"
+                  :disabled="verifyHint.actionLoading"
+                  :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+                  @click="triggerHttpVerify"
+                >
+                  {{ verifyHint.actionLoading ? "处理中..." : "我已完成 HTTP 验证" }}
                 </button>
               </div>
             </div>
