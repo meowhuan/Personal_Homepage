@@ -2417,13 +2417,20 @@ async fn links_review_report_manual(
             email.as_deref().unwrap_or("-"),
             review_note.as_deref().unwrap_or("-")
         );
+        let html = build_manual_review_admin_html(
+            payload.application_id,
+            &site_name,
+            &site_url,
+            email.as_deref(),
+            review_note.as_deref().unwrap_or("-"),
+        );
         let send_result = if let Some(smtp_cfg) = notify_cfg.smtp.as_ref() {
             if smtp_cfg.to.is_empty() {
                 Err("smtp to recipients is empty".to_string())
             } else {
                 state
                     .notifier
-                    .send_smtp(Some(smtp_cfg), &subject, &msg, None)
+                    .send_smtp_rich(Some(smtp_cfg), &subject, &msg, Some(&html), None)
                     .await
             }
         } else {
@@ -3721,6 +3728,25 @@ fn build_auto_review_admin_html(
         r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;"><div style="max-width:640px;margin:24px auto;padding:0 12px;"><div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);"><div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 自动审核结果</div><div style="padding:16px;"><div style="display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;">{action_text}</div><div style="margin-top:14px;line-height:1.75;"><div><strong>application_id：</strong>{app_id}</div><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href="{url}" style="color:#5b4cc4;text-decoration:none;">{url}</a></div><div><strong>申请邮箱：</strong>{email}</div><div><strong>审核备注：</strong>{note}</div></div><div style="margin-top:14px;font-size:12px;color:#7b6b7a;">此邮件由系统自动发送。</div></div></div></div></body></html>"#,
         status_color = status_color,
         action_text = escape_html(action_text),
+        app_id = application_id,
+        name = escape_html(site_name),
+        url = escape_html(site_url),
+        email = escape_html(applicant_email.unwrap_or("-")),
+        note = escape_html(review_note),
+    )
+}
+
+fn build_manual_review_admin_html(
+    application_id: i64,
+    site_name: &str,
+    site_url: &str,
+    applicant_email: Option<&str>,
+    review_note: &str,
+) -> String {
+    let status_color = "#5b4cc4";
+    format!(
+        r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;"><div style="max-width:640px;margin:24px auto;padding:0 12px;"><div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);"><div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 人工审核提醒</div><div style="padding:16px;"><div style="display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;">MANUAL REVIEW</div><div style="margin-top:14px;line-height:1.75;"><div><strong>application_id：</strong>{app_id}</div><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href="{url}" style="color:#5b4cc4;text-decoration:none;">{url}</a></div><div><strong>申请邮箱：</strong>{email}</div><div><strong>审核备注：</strong>{note}</div></div><div style="margin-top:14px;font-size:12px;color:#7b6b7a;">此邮件由系统自动发送。</div></div></div></div></body></html>"#,
+        status_color = status_color,
         app_id = application_id,
         name = escape_html(site_name),
         url = escape_html(site_url),
