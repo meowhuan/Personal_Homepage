@@ -117,6 +117,15 @@ const submitApply = async () => {
     submitError.value = "请填写站点名称、站点地址和联系邮箱。";
     return;
   }
+  const blockedEmails = new Set([
+    "meowhuan@qq.com",
+    "meowhuan@meowra.cn",
+    "3250315682@qq.com"
+  ]);
+  if (blockedEmails.has(email.toLowerCase())) {
+    submitError.value = "该邮箱不支持用于友链申请。";
+    return;
+  }
   if (siteName.length > 32) {
     submitError.value = "站点名称最多 32 个字符。";
     return;

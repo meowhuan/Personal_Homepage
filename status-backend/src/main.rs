@@ -1398,6 +1398,15 @@ async fn links_apply(
         )
             .into_response();
     }
+    if is_blocked_contact_email(&email) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "该邮箱不支持用于友链申请".to_string(),
+            }),
+        )
+            .into_response();
+    }
     if anti_abuse.disposable_email_block && is_disposable_email_domain(&email) {
         return (
             StatusCode::BAD_REQUEST,
@@ -4283,6 +4292,14 @@ fn is_valid_email_address(email: &str) -> bool {
         return false;
     }
     !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn is_blocked_contact_email(email: &str) -> bool {
+    let value = email.trim().to_lowercase();
+    matches!(
+        value.as_str(),
+        "meowhuan@qq.com" | "meowhuan@meowra.cn" | "3250315682@qq.com"
+    )
 }
 
 fn is_disposable_email_domain(email: &str) -> bool {
