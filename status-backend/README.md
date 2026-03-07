@@ -148,3 +148,75 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
   Public backend does not crawl external sites; review/backlink checks are done by internal `review-reporter`.
 - 若申请记录包含 `email` 且 SMTP 可用，审核结果会自动邮件通知申请者。
   If an application has `email` and SMTP is configured, review results are emailed automatically.
+
+## 内网审查计算 / Internal Review Scoring
+
+以下为内网 `review-reporter` 当前自动审核规则摘要（实现见 `status-backend/src/bin/review-reporter.rs`）。  
+The following is a summary of current auto-review rules in internal `review-reporter`.
+
+### 1) 评分制自动审核（pending applications）/ Score-based Auto Review
+
+- 初始分：`50` / Base score: `50`
+- 域名风险（`localhost` / 内网段 / `.local`）：`-40`
+  Domain risk (`localhost` / private IP / `.local`): `-40`
+- 命中垃圾关键词（博彩/代刷/色情等）：`-80`
+  Spam keyword hit (gambling/boost/NSFW etc.): `-80`
+- 简介长度：
+  Description length:
+- `8~180` 字：`+12`
+  `8~180` chars: `+12`
+- 其它：`-10`
+  otherwise: `-10`
+- 头像 URL 合法（http/https）：`+4`
+  Avatar URL valid (http/https): `+4`
+- 抓取主页：
+  Fetch homepage:
+- 请求成功且状态码 2xx/3xx：`+18`
+  success 2xx/3xx: `+18`
+- 请求成功但状态码异常：`-24`
+  success but bad status: `-24`
+- 请求失败：`-25`
+  request failed: `-25`
+- 页面基础 SEO：
+  Basic SEO:
+- 含 `<title>`：`+5`
+  has `<title>`: `+5`
+- 含 `description`：`+5`
+  has `description`: `+5`
+- 含 `meta`：`+6`（否则 `-6`）
+  has `meta`: `+6` (otherwise `-6`)
+- 包含本站链接（`LINK_BACKLINK_TARGET`）：`+10`，否则 `-10`
+  contains backlink (`LINK_BACKLINK_TARGET`): `+10`, else `-10`
+- 第三方 SEO 接口（可选，内网 worker 配置后生效）：
+  Third-party SEO (optional, enabled in internal worker):
+- `REVIEW_SEO_PROVIDER=generic`：调用自定义评分接口，返回 `score (0~100)`
+  `REVIEW_SEO_PROVIDER=generic`: call custom scoring API returning `score (0~100)`
+- `REVIEW_SEO_PROVIDER=serpapi`：调用 SerpAPI 搜索结果进行扩展评分
+  `REVIEW_SEO_PROVIDER=serpapi`: use SerpAPI for extra scoring
+- 按 `REVIEW_SEO_MAX_BONUS` 折算为加减分
+  Converted to delta using `REVIEW_SEO_MAX_BONUS`
+- 折算公式：`delta = ((score - 50) * max_bonus) / 50`
+  Formula: `delta = ((score - 50) * max_bonus) / 50`
+
+决策阈值（当前内网 worker 固定）：  
+Decision thresholds (current internal worker defaults):
+
+- `score >= 80`：自动 `approve`
+  `score >= 80`: auto `approve`
+- `score < 40`：自动 `reject`
+  `score < 40`: auto `reject`
+- 其余：保持 `pending`（人工审核）
+  otherwise: keep `pending` (manual review)
+
+### 2) 通过后的回查与下架 / Post-approval Checks
+
+- 回链检查（默认 24h，`LINK_BACKLINK_ENFORCE_HOURS`）：
+  Backlink check (default 24h, `LINK_BACKLINK_ENFORCE_HOURS`):
+- 若到期仍未检测到本站链接，自动下架（`removed_no_backlink`）
+  if still missing by deadline, auto remove (`removed_no_backlink`)
+- 默认使用 HTTP 源码抓取；可选 Playwright 渲染抓取（用于 JavaScript 动态页面）
+  default HTTP fetch; optional Playwright rendering for JS pages
+- 可访问性检查（默认 72h，`LINK_UNREACHABLE_ENFORCE_HOURS`）：
+  Reachability check (default 72h, `LINK_UNREACHABLE_ENFORCE_HOURS`):
+- 连续不可访问达到阈值后自动下架（`removed_unreachable`）
+  auto remove after consecutive unreachable (`removed_unreachable`)
