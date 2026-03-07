@@ -82,6 +82,7 @@ STATUS_TOKEN=your_token
 - `POST /links/verify/http` (公开验证接口：检测 `/.well-known/meow-links.txt` token)
 - `POST /links/verify/email/send` (公开验证接口：发送邮箱验证链接，需携带申请时的 `verify_token`，captcha 开启时需带 `captcha_token`)
 - `GET /links/verify/email?token=...` (公开验证接口：点击后进入审核队列)
+- `POST /links/verify/reset` (需要 token，重置未验证申请的验证 token 与有效期)
 - `GET /links/applications` (需要 token，申请列表)
 - `POST /links/review` (需要 token，审核通过/拒绝)
 - `POST /links/sort` (需要 token，更新已收录友链排序)

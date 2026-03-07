@@ -119,6 +119,12 @@
               </div>
               <div class="small">仅显示 `pending`，审核通过/拒绝后会自动从此处消失。</div>
               <div id="app-list" class="list"></div>
+              <div class="row-inline" style="margin-top:10px;">
+                <strong>待验证申请</strong>
+                <span class="small" id="verify-count"></span>
+              </div>
+              <div class="small">仅显示 `verify_pending`，可重置验证 token 与有效期。</div>
+              <div id="verify-list" class="list"></div>
               <div style="margin-top:10px;">
                 <strong>操作状态与日志</strong>
                 <div id="status" class="status-box">等待操作</div>
@@ -274,8 +280,10 @@
       const tokenEl = document.getElementById("token");
       const baseEl = document.getElementById("base");
       const appListEl = document.getElementById("app-list");
+      const verifyListEl = document.getElementById("verify-list");
       const linkListEl = document.getElementById("link-list");
       const pendingCountEl = document.getElementById("pending-count");
+      const verifyCountEl = document.getElementById("verify-count");
 
       const api = (path) => `${baseEl.value.trim()}${path}`;
       const apiNoStore = (path) => {
@@ -420,6 +428,77 @@
             try { await submitReview("reject"); } catch (err) { setStatus(err.message || "审核失败"); }
           });
           appListEl.appendChild(wrap);
+        });
+      };
+
+      const renderVerifyPending = (items = []) => {
+        verifyListEl.innerHTML = "";
+        const pending = items.filter((item) => item.status === "verify_pending");
+        verifyCountEl.textContent = `待验证 ${pending.length} 条`;
+        if (pending.length === 0) {
+          verifyListEl.innerHTML = `<div class="small">暂无待验证申请</div>`;
+          return;
+        }
+        pending.forEach((item) => {
+          const wrap = document.createElement("div");
+          wrap.className = "item";
+          wrap.innerHTML = `
+            <div class="item-head">
+              <div>
+                <div class="item-title">${esc(item.site_name)}</div>
+                <div class="item-meta">${esc(item.site_url)}</div>
+              </div>
+              <div class="small">${esc(item.status)} · ${ts(item.created_at)}</div>
+            </div>
+            <div class="small">邮箱：${esc(item.email || "-")} | IP：${esc(item.ip || "-")}</div>
+            <div class="small">简介：${esc(item.description || "-")}</div>
+            <div class="small">备注：${esc(item.note || "-")}</div>
+            <div class="small">验证 token：<code>${esc(item.verify_token || "-")}</code></div>
+            <div class="small">验证截止：${item.verify_deadline ? ts(item.verify_deadline) : "-"}</div>
+            <div class="toolbar" style="margin-bottom:0;">
+              <button class="ghost" data-copy-token>复制 token</button>
+              <button class="ok" data-reset-verify>重置验证</button>
+            </div>
+          `;
+          wrap.querySelector("[data-copy-token]").addEventListener("click", async () => {
+            const token = item.verify_token || "";
+            if (!token) return;
+            try {
+              if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(token);
+              } else {
+                const input = document.createElement("textarea");
+                input.value = token;
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand("copy");
+                document.body.removeChild(input);
+              }
+              setStatus("token 已复制");
+            } catch {
+              setStatus("复制失败");
+            }
+          });
+          wrap.querySelector("[data-reset-verify]").addEventListener("click", async () => {
+            if (!confirm("确定重置该申请的验证流程吗？")) return;
+            try {
+              setStatus("重置验证中...");
+              const res = await fetch(api("/links/verify/reset"), {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({ application_id: item.id })
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                throw new Error(data.message || "重置验证失败");
+              }
+              await loadApplications();
+              setStatus(data.message || "验证已重置");
+            } catch (err) {
+              setStatus(err.message || "重置验证失败");
+            }
+          });
+          verifyListEl.appendChild(wrap);
         });
       };
 
@@ -568,7 +647,9 @@
         });
         if (!res.ok) throw new Error("加载申请失败");
         const data = await res.json();
-        renderApplications(Array.isArray(data) ? data : []);
+        const items = Array.isArray(data) ? data : [];
+        renderApplications(items);
+        renderVerifyPending(items);
       };
 
       const loadLinks = async () => {

@@ -29,6 +29,8 @@ use trust_dns_resolver::{
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
+const VERIFY_EXPIRED_CLEANUP_GRACE_SECS: i64 = 12 * 60 * 60;
+
 #[derive(Clone)]
 struct AppState {
     db: Arc<Mutex<Connection>>,
@@ -258,6 +260,11 @@ struct LinkVerifyEmailSendPayload {
 }
 
 #[derive(Deserialize)]
+struct LinkVerifyResetPayload {
+    application_id: i64,
+}
+
+#[derive(Deserialize)]
 struct LinkVerifyEmailQuery {
     token: String,
 }
@@ -367,6 +374,13 @@ struct LinkApplyConfigResponse {
 struct VerifyEmailSendResponse {
     message: String,
     verify_token: Option<String>,
+}
+
+#[derive(Serialize)]
+struct VerifyResetResponse {
+    message: String,
+    verify_token: String,
+    verify_deadline: i64,
 }
 
 #[derive(Deserialize)]
@@ -725,6 +739,7 @@ async fn main() {
         .route("/links/verify/http", post(links_verify_http))
         .route("/links/verify/email/send", post(links_verify_email_send))
         .route("/links/verify/email", get(links_verify_email))
+        .route("/links/verify/reset", post(links_verify_reset))
         .route("/links/applications", get(links_applications))
         .route("/links/review", post(links_review))
         .route("/links/sort", post(links_sort))
@@ -1446,6 +1461,93 @@ async fn links_apply(
 
     {
         let conn = state.db.lock().unwrap();
+        let cleanup_before = now - VERIFY_EXPIRED_CLEANUP_GRACE_SECS;
+        let _ = conn.execute(
+            "DELETE FROM friend_link_verify_email_log
+             WHERE application_id IN (
+               SELECT id FROM friend_link_applications
+               WHERE status = 'verify_pending'
+                 AND verify_deadline IS NOT NULL
+                 AND verify_deadline < ?1
+             )",
+            params![cleanup_before],
+        );
+        let _ = conn.execute(
+            "DELETE FROM friend_link_applications
+             WHERE status = 'verify_pending'
+               AND verify_deadline IS NOT NULL
+               AND verify_deadline < ?1",
+            params![cleanup_before],
+        );
+        let existing_verify = {
+            let mut stmt = match conn.prepare(
+                "SELECT id, site_url, verify_token, verify_deadline
+                 FROM friend_link_applications
+                 WHERE status = 'verify_pending'
+                 ORDER BY created_at DESC",
+            ) {
+                Ok(v) => v,
+                Err(_) => {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            let rows = match stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            }) {
+                Ok(v) => v,
+                Err(_) => {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            };
+            let candidates: Vec<_> = rows.filter_map(Result::ok).collect();
+            candidates.into_iter().find(|(_, url, _, _)| {
+                Url::parse(url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(normalize_host))
+                    .map(|host| host == site_host || host.ends_with(&format!(".{}", site_host)))
+                    .unwrap_or(false)
+            })
+        };
+        if let Some((id, _url, token_opt, deadline_opt)) = existing_verify {
+            let mut token = token_opt.unwrap_or_default();
+            let mut deadline = deadline_opt.unwrap_or(0);
+            if deadline > 0 && deadline < now {
+                token = generate_verify_token();
+                deadline = now + anti_abuse.verify_window_secs;
+                let _ = conn.execute(
+                    "UPDATE friend_link_applications
+                     SET verify_token = ?1, verify_deadline = ?2, updated_at = ?3
+                     WHERE id = ?4",
+                    params![token, deadline, now, id],
+                );
+            } else if token.is_empty() {
+                deadline = deadline.max(verify_deadline);
+                token = generate_verify_token();
+                let _ = conn.execute(
+                    "UPDATE friend_link_applications
+                     SET verify_token = ?1, verify_deadline = ?2, updated_at = ?3
+                     WHERE id = ?4",
+                    params![token, deadline, now, id],
+                );
+            }
+            return (
+                StatusCode::OK,
+                Json(LinkApplyResponse {
+                    message: "该站点已有待验证申请，已为你加载验证信息。".to_string(),
+                    application_id: id,
+                    verify_status: "verify_pending".to_string(),
+                    http_verify_path: "/.well-known/meow-links.txt".to_string(),
+                    verify_token: token,
+                    verify_deadline: deadline,
+                }),
+            )
+                .into_response();
+        }
         let recent_apply_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM friend_link_applications
@@ -1550,8 +1652,12 @@ async fn links_apply(
         let pending_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM friend_link_applications
-                 WHERE site_url = ?1 AND status IN ('pending','verify_pending')",
-                params![site_url],
+                 WHERE site_url = ?1
+                   AND (
+                     status = 'pending'
+                     OR (status = 'verify_pending' AND (verify_deadline IS NULL OR verify_deadline >= ?2))
+                   )",
+                params![site_url, now],
                 |row| row.get(0),
             )
             .unwrap_or(0);
@@ -2046,6 +2152,76 @@ async fn links_verify_email(
     (
         StatusCode::OK,
         "<!doctype html><html><body style=\"font-family:sans-serif;padding:24px;\">邮箱验证成功，申请已进入审核队列。</body></html>",
+    )
+        .into_response()
+}
+
+async fn links_verify_reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkVerifyResetPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let anti_abuse = {
+        let conn = state.db.lock().unwrap();
+        resolve_anti_abuse_config(&conn, &state.anti_abuse)
+    };
+    let now = now_ts();
+    let status = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            "SELECT status FROM friend_link_applications WHERE id = ?1",
+            params![payload.application_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+    };
+    let Some(status) = status else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiMessage {
+                message: "申请不存在".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    if status != "verify_pending" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "仅支持未验证申请重置验证".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let new_token = generate_verify_token();
+    let verify_deadline = now + anti_abuse.verify_window_secs;
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE friend_link_applications
+             SET verify_token = ?1,
+                 verify_deadline = ?2,
+                 verify_http_at = NULL,
+                 verify_email_at = NULL,
+                 updated_at = ?3
+             WHERE id = ?4 AND status = 'verify_pending'",
+            params![new_token, verify_deadline, now, payload.application_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM friend_link_verify_email_log WHERE application_id = ?1",
+            params![payload.application_id],
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(VerifyResetResponse {
+            message: "验证已重置，可重新走验证流程".to_string(),
+            verify_token: new_token,
+            verify_deadline,
+        }),
     )
         .into_response()
 }
