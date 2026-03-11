@@ -5,6 +5,7 @@ const SCHEDULE_URL = "https://m.ratf.cn/schedule";
 const BLOG_URL = "https://m.ratf.cn/blog";
 const VISITOR_URL = "https://m.ratf.cn/visitor";
 const VISITOR_VISIT_URL = "https://m.ratf.cn/visitor/visit";
+const STREAM_STATUS_URL = "https://lives.meowra.cn/api/stream/status";
 const VISITOR_ID_KEY = "meow-visitor-id";
 const QUOTE_FALLBACK = "今天也要温柔一点。";
 const HRT_TARGET_DATE = "2026-01-16T00:00:00+08:00";
@@ -59,6 +60,12 @@ export function useHomepageState() {
   const visitorUpdatedAt = ref(0);
   const visitorNextAt = ref(0);
 
+  const streamStatus = ref(null);
+  const streamLoading = ref(false);
+  const streamError = ref(false);
+  const streamUpdatedAt = ref(0);
+  const streamNextAt = ref(0);
+
   const themeMedia = ref(null);
 
   const quoteCooldownMs = 1500;
@@ -66,13 +73,15 @@ export function useHomepageState() {
   const scheduleCooldownMs = 5000;
   const blogCooldownMs = 5000;
   const visitorCooldownMs = 5000;
+  const streamStatusCooldownMs = 10000;
 
   const timers = {
     clock: 0,
     intro: 0,
     statusPoll: 0,
     schedulePoll: 0,
-    blogPoll: 0
+    blogPoll: 0,
+    streamStatusPoll: 0
   };
 
   const hasOnlineDevice = computed(() =>
@@ -149,6 +158,7 @@ export function useHomepageState() {
   const canFetchSchedule = () => Date.now() >= scheduleNextAt.value;
   const canFetchBlog = () => Date.now() >= blogNextAt.value;
   const canFetchVisitor = () => Date.now() >= visitorNextAt.value;
+  const canFetchStreamStatus = () => Date.now() >= streamNextAt.value;
 
   const fetchQuote = () => {
     if (!canFetchQuote()) return;
@@ -286,6 +296,27 @@ export function useHomepageState() {
     }
   };
 
+  const fetchStreamStatus = async () => {
+    if (!canFetchStreamStatus()) return;
+    streamNextAt.value = Date.now() + streamStatusCooldownMs;
+    streamLoading.value = true;
+    try {
+      const res = await fetch(STREAM_STATUS_URL);
+      if (!res.ok) throw new Error("stream status fetch failed");
+      const data = await res.json();
+      streamStatus.value = {
+        isLive: data.live === true || data.status === "live",
+        status: data.status || (data.live ? "live" : "offline")
+      };
+      streamError.value = false;
+      streamUpdatedAt.value = Date.now();
+    } catch {
+      streamError.value = true;
+    } finally {
+      streamLoading.value = false;
+    }
+  };
+
   const loadGiscus = () => {
     const container = document.getElementById("giscus");
     if (!container || container.hasChildNodes()) return;
@@ -326,11 +357,13 @@ export function useHomepageState() {
     fetchStatus();
     fetchSchedule();
     fetchBlog();
+    fetchStreamStatus();
     initVisitorId();
     fetchVisitorStats();
     timers.statusPoll = window.setInterval(fetchStatus, 60000);
     timers.schedulePoll = window.setInterval(fetchSchedule, 120000);
     timers.blogPoll = window.setInterval(fetchBlog, 180000);
+    timers.streamStatusPoll = window.setInterval(fetchStreamStatus, 10000);
 
     const savedTheme = localStorage.getItem("meow-theme");
     if (savedTheme) {
@@ -355,6 +388,7 @@ export function useHomepageState() {
     if (timers.statusPoll) window.clearInterval(timers.statusPoll);
     if (timers.schedulePoll) window.clearInterval(timers.schedulePoll);
     if (timers.blogPoll) window.clearInterval(timers.blogPoll);
+    if (timers.streamStatusPoll) window.clearInterval(timers.streamStatusPoll);
     if (themeMedia.value) {
       themeMedia.value.removeEventListener("change", onSystemThemeChange);
     }
@@ -404,6 +438,12 @@ export function useHomepageState() {
     canFetchSchedule,
     fetchSchedule,
     canFetchBlog,
-    fetchBlog
+    fetchBlog,
+    streamStatus,
+    streamLoading,
+    streamError,
+    streamUpdatedAt,
+    canFetchStreamStatus,
+    fetchStreamStatus
   };
 }

@@ -45,7 +45,13 @@ const {
   canFetchSchedule,
   fetchSchedule,
   canFetchBlog,
-  fetchBlog
+  fetchBlog,
+  streamStatus,
+  streamLoading,
+  streamError,
+  streamUpdatedAt,
+  canFetchStreamStatus,
+  fetchStreamStatus
 } = useHomepageState();
 </script>
 <template>
@@ -124,6 +130,7 @@ const {
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#projects">项目</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/blog.html">博客</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/friends.html">友链</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="https://live.meowra.cn" target="_blank" rel="noreferrer">直播</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
             <button
               class="cord-switch cord-switch-desktop cord-switch-desktop-right"
@@ -430,6 +437,48 @@ const {
               </p>
               <span class="meow-pill motion-press mt-4">随缘更新</span>
             </article>
+          </div>
+        </section>
+
+        <section id="stream" class="mt-16">
+          <h2 class="font-display text-2xl">直播状态</h2>
+          <div class="mt-6">
+            <div
+              class="meow-card motion-card p-5"
+              style="--float-delay: 0.25s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1">
+                  <div class="text-[11px] uppercase tracking-widest" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">直播状态</div>
+                  <div class="mt-2 text-base font-600" v-if="streamLoading">加载中…</div>
+                  <div v-else-if="streamError" class="mt-2 text-base" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">暂时无法获取</div>
+                  <div v-else-if="streamStatus" class="mt-2">
+                    <div class="text-base font-600" :class="streamStatus?.isLive ? (isNight ? 'text-meow-night-accent' : 'text-meow-accent') : (isNight ? 'text-meow-night-soft' : 'text-meow-soft')">
+                      {{ streamStatus?.isLive ? '🔴 直播中' : '⚪ 未直播' }}
+                    </div>
+                    <div v-if="streamStatus?.status" class="mt-1 text-sm" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                      状态：{{ streamStatus.status }}
+                    </div>
+                    <div v-if="streamUpdatedAt" class="mt-2 text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                      更新于 {{ new Date(streamUpdatedAt).toLocaleTimeString("zh-CN") }}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  class="meow-pill motion-press px-2 py-1 text-[11px]"
+                  type="button"
+                  :disabled="!canFetchStreamStatus() || streamLoading"
+                  :class="[
+                    (!canFetchStreamStatus() || streamLoading) ? 'opacity-50' : '',
+                    isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''
+                  ]"
+                  @click="fetchStreamStatus()"
+                >
+                  {{ streamLoading ? "刷新中" : (canFetchStreamStatus() ? "刷新" : "冷却中") }}
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
