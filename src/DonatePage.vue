@@ -61,33 +61,60 @@ const titleClass = computed(() => (isNight.value ? "text-meow-night-ink" : "text
         如果这里的内容让你觉得有一点点被陪伴到，欢迎给小猫投喂一杯奶茶。你的每一份心意，都会变成我继续更新和维护站点的动力。
       </p>
 
-      <section class="mt-8 grid gap-4 md:grid-cols-2">
-        <article class="rounded-3xl border p-5 shadow-[0_12px_28px_rgba(47,20,47,0.1)]" :class="cardClass">
-          <h2 class="text-lg font-700" :class="titleClass">微信投喂</h2>
-          <p class="mt-2 text-sm leading-relaxed">
-            轻轻一扫，把温柔传送给 meow。谢谢你愿意支持这个小角落。
+      <section class="mt-8">
+        <article class="rounded-3xl border p-6 shadow-[0_12px_28px_rgba(47,20,47,0.1)]" :class="cardClass">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-lg font-700" :class="titleClass">爱发电 · 首选</h2>
+            <span
+              class="rounded-full border px-3 py-1 text-xs tracking-wide"
+              :class="isNight ? 'border-meow-night-line text-meow-night-soft' : 'border-meow-line text-meow-soft'"
+            >
+              优先支持
+            </span>
+          </div>
+          <p class="mt-3 text-sm leading-relaxed">
+            如果方便的话，欢迎优先使用爱发电来投喂 meow。你的支持会直接变成更多内容与更新的动力。
           </p>
-          <img
-            class="mt-4 h-[320px] w-full rounded-2xl border bg-white p-2 object-contain md:h-[360px]"
-            :class="isNight ? 'border-meow-night-line' : 'border-meow-line'"
-            src="https://image.meowra.cn/i/2026/02/15/6991426216e96.png"
-            alt="微信赞赏码"
-          />
+          <a
+            class="meow-btn mt-4 inline-flex items-center justify-center px-6 py-2.5 text-sm transition-transform duration-200 hover:-translate-y-0.5"
+            :class="isNight
+              ? 'shadow-[0_6px_14px_rgba(90,120,180,0.2)]'
+              : 'shadow-[0_6px_14px_rgba(47,20,47,0.12)]'"
+            href="https://ifdian.net/a/meowhuan"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            去爱发电主页
+          </a>
+        </article>
+      </section>
+
+      <section class="mt-6 grid gap-4 md:grid-cols-2">
+        <article class="rounded-3xl border p-5 shadow-[0_12px_28px_rgba(47,20,47,0.1)]" :class="cardClass">
+          <h2 class="text-lg font-700" :class="titleClass">想对你说</h2>
+          <p class="mt-2 text-sm leading-relaxed">
+            你的支持让我更有勇气继续更新这个小角落。无论是赞助、鼓励，还是来打个招呼，都会让我很开心。
+          </p>
+          <div class="mt-4 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+            谢谢你愿意在这里停留一下。
+          </div>
         </article>
 
         <article class="rounded-3xl border p-5 shadow-[0_12px_28px_rgba(47,20,47,0.1)]" :class="cardClass">
-          <h2 class="text-lg font-700" :class="titleClass">支付宝投喂</h2>
+          <h2 class="text-lg font-700" :class="titleClass">其他方式请私信</h2>
           <p class="mt-2 text-sm leading-relaxed">
-            这份赞赏我会认真收好，拿去喂养灵感、代码和一点点日常勇气。
+            为了保护隐私，其他赞助方式不在页面公开。如果你需要，请通过主页的联系方式私信我，我会告诉你。
           </p>
-          <img
-            class="mt-4 h-[320px] w-full rounded-2xl border bg-white p-2 object-contain md:h-[360px]"
-            :class="isNight ? 'border-meow-night-line' : 'border-meow-line'"
-            src="https://image.meowra.cn/i/2026/02/15/69914263c15c8.jpg"
-            alt="支付宝赞赏码"
-          />
+          <a
+            class="meow-btn-ghost mt-4 inline-flex items-center justify-center"
+            :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+            href="/#contact"
+          >
+            前往联系方式
+          </a>
         </article>
       </section>
+
     </main>
   </div>
 </template>
