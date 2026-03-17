@@ -1,4 +1,5 @@
 <script setup>
+import { onMounted, onBeforeUnmount, ref } from "vue";
 import { useHomepageState } from "./composables/useHomepageState";
 
 const {
@@ -53,6 +54,51 @@ const {
   canFetchStreamStatus,
   fetchStreamStatus
 } = useHomepageState();
+
+const projectsRowRef = ref(null);
+const isDraggingProjects = ref(false);
+const dragStartX = ref(0);
+const dragStartScroll = ref(0);
+
+const scrollProjects = (direction) => {
+  const node = projectsRowRef.value;
+  if (!node) return;
+  const cardWidth = node.querySelector(".project-card")?.offsetWidth || 320;
+  const gap = 16;
+  node.scrollBy({ left: (cardWidth + gap) * direction, behavior: "smooth" });
+};
+
+const onProjectsPointerDown = (event) => {
+  const node = projectsRowRef.value;
+  if (!node) return;
+  if (event.pointerType !== "mouse") return;
+  if (event.button !== 0) return;
+  isDraggingProjects.value = true;
+  dragStartX.value = event.clientX;
+  dragStartScroll.value = node.scrollLeft;
+  node.classList.add("is-dragging");
+  if (event.pointerType === "mouse") {
+    node.setPointerCapture?.(event.pointerId);
+  }
+};
+
+const onProjectsPointerMove = (event) => {
+  const node = projectsRowRef.value;
+  if (!node || !isDraggingProjects.value) return;
+  const deltaX = event.clientX - dragStartX.value;
+  node.scrollLeft = dragStartScroll.value - deltaX;
+  if (event.cancelable) event.preventDefault();
+};
+
+const onProjectsPointerUp = (event) => {
+  const node = projectsRowRef.value;
+  if (!node) return;
+  isDraggingProjects.value = false;
+  node.classList.remove("is-dragging");
+  if (event.pointerType === "mouse") {
+    node.releasePointerCapture?.(event.pointerId);
+  }
+};
 </script>
 <template>
   <div
@@ -243,6 +289,15 @@ const {
                 href="/blog.html"
               >
                 喵喵博客
+              </a>
+              <a
+                class="meow-btn-ghost motion-press"
+                :class="isNight ? 'border-meow-night-line text-meow-night-ink hover:bg-meow-night-card/80' : ''"
+                href="https://live.meowra.cn/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                直播页面
               </a>
               <a
                 class="meow-btn-ghost motion-press"
@@ -485,19 +540,51 @@ const {
         <section id="projects" class="mt-16">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <h2 class="font-display text-2xl">GitHub 项目</h2>
-            <a
-              class="meow-pill motion-press"
-              :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
-              href="https://github.com/meowhuan"
-              target="_blank"
-              rel="noreferrer"
-            >
-              查看更多
-            </a>
+            <div class="flex items-center gap-2">
+              <span class="projects-hint text-[11px]" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">左右滑动查看</span>
+              <div class="projects-actions">
+                <button
+                  class="meow-pill motion-press"
+                  type="button"
+                  :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
+                  aria-label="向左滚动项目"
+                  @click="scrollProjects(-1)"
+                >
+                  ←
+                </button>
+                <button
+                  class="meow-pill motion-press"
+                  type="button"
+                  :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
+                  aria-label="向右滚动项目"
+                  @click="scrollProjects(1)"
+                >
+                  →
+                </button>
+              </div>
+              <a
+                class="meow-pill motion-press"
+                :class="isNight ? 'border-meow-night-line bg-meow-night-bg text-meow-night-ink' : ''"
+                href="https://github.com/meowhuan"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看更多
+              </a>
+            </div>
           </div>
-          <div class="mt-6 grid gap-4 md:grid-cols-3">
+          <div class="mt-6 projects-scroll-wrap">
+            <div
+              class="projects-row"
+              ref="projectsRowRef"
+              @pointerdown="onProjectsPointerDown"
+              @pointermove="onProjectsPointerMove"
+              @pointerup="onProjectsPointerUp"
+              @pointerleave="onProjectsPointerUp"
+              @pointercancel="onProjectsPointerUp"
+            >
             <article
-              class="meow-card motion-card p-5"
+              class="meow-card motion-card project-card p-5"
               style="--float-delay: 0.1s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
@@ -515,8 +602,8 @@ const {
               </a>
             </article>
             <article
-              class="meow-card motion-card p-5"
-              style="--float-delay: 0.35s"
+              class="meow-card motion-card project-card p-5"
+              style="--float-delay: 0.22s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
               <h3 class="text-base font-600">Android Cam Bridge</h3>
@@ -533,8 +620,8 @@ const {
               </a>
             </article>
             <article
-              class="meow-card motion-card p-5"
-              style="--float-delay: 0.6s"
+              class="meow-card motion-card project-card p-5"
+              style="--float-delay: 0.35s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
               <h3 class="text-base font-600">Personal Homepage</h3>
@@ -550,6 +637,43 @@ const {
                 查看项目
               </a>
             </article>
+            <article
+              class="meow-card motion-card project-card p-5"
+              style="--float-delay: 0.5s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
+              <h3 class="text-base font-600">Private Music Platform</h3>
+              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                私人音乐平台，聚合播放、整理与管理音乐内容，持续迭代中。
+              </p>
+              <a
+                class="meow-pill motion-press mt-4 inline-flex"
+                href="https://github.com/meowhuan/Private_Music_Platform"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看项目
+              </a>
+            </article>
+            <article
+              class="meow-card motion-card project-card p-5"
+              style="--float-delay: 0.65s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
+              <h3 class="text-base font-600">Live Streaming Platform</h3>
+              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                直播平台相关项目，包含直播流程与管理功能的探索与实现。
+              </p>
+              <a
+                class="meow-pill motion-press mt-4 inline-flex"
+                href="https://github.com/meowhuan/Live_streaming_platform"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看项目
+              </a>
+            </article>
+            </div>
           </div>
         </section>
 

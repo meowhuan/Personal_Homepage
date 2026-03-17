@@ -364,6 +364,54 @@
   padding-right: 4px;
 }
 
+.projects-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.projects-hint {
+  letter-spacing: 1px;
+}
+
+.projects-scroll-wrap {
+  position: relative;
+  padding: 6px 0 10px;
+}
+
+
+.projects-row {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 8px 16px 16px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  cursor: grab;
+  scroll-padding: 16px;
+  overscroll-behavior-x: contain;
+  scroll-behavior: auto;
+}
+
+.projects-row::-webkit-scrollbar {
+  display: none;
+}
+
+.projects-row.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.project-card {
+  flex: 0 0 min(320px, 82vw);
+  box-shadow: none !important;
+}
+
+.project-card.motion-card:hover {
+  box-shadow: none !important;
+}
+
 .meow-title {
   font-weight: 700;
   letter-spacing: 2px;
