@@ -36,6 +36,15 @@ const cardClass = computed(() =>
 );
 
 const titleClass = computed(() => (isNight.value ? "text-meow-night-ink" : "text-meow-ink"));
+
+const gratitudeList = ref([
+  {
+    date: "2026-03-17 22:52:04",
+    amount: 162,
+    name: "姐姐",
+    message: "世界最可爱的小天使，每天都要开心哦",
+  },
+]);
 </script>
 
 <template>
@@ -90,6 +99,42 @@ const titleClass = computed(() => (isNight.value ? "text-meow-night-ink" : "text
       </section>
 
       <section class="mt-6 grid gap-4 md:grid-cols-2">
+        <article class="rounded-3xl border p-5 shadow-[0_12px_28px_rgba(47,20,47,0.1)] md:col-span-2" :class="cardClass">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 class="text-lg font-700" :class="titleClass">感谢名单</h2>
+            <span
+              class="rounded-full border px-3 py-1 text-xs tracking-wide"
+              :class="isNight ? 'border-meow-night-line text-meow-night-soft' : 'border-meow-line text-meow-soft'"
+            >
+              按更新顺序展示
+            </span>
+          </div>
+          <p class="mt-2 text-sm leading-relaxed">
+            感谢每一位赞助和鼓励我的朋友。这里会持续更新公开署名的喵友名单。
+          </p>
+          <ul v-if="gratitudeList.length" class="mt-4 grid gap-2 sm:grid-cols-2">
+            <li
+              v-for="(item, index) in gratitudeList"
+              :key="`${item.name}-${index}`"
+              class="rounded-2xl border px-3 py-2 text-sm"
+              :class="isNight ? 'border-meow-night-line/80 bg-meow-night-card/65' : 'border-meow-line/80 bg-white/60'"
+            >
+              <div class="font-600" :class="titleClass">{{ index + 1 }}. {{ item.name }}</div>
+              <div class="mt-1 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                {{ item.date }} · 爱发电赞助 {{ item.amount }} 元
+              </div>
+              <div class="mt-1 text-sm">留言：{{ item.message }}</div>
+            </li>
+          </ul>
+          <div
+            v-else
+            class="mt-4 rounded-2xl border border-dashed px-4 py-3 text-sm"
+            :class="isNight ? 'border-meow-night-line text-meow-night-soft' : 'border-meow-line text-meow-soft'"
+          >
+            名单整理中，公开署名后会第一时间更新在这里。
+          </div>
+        </article>
+
         <article class="rounded-3xl border p-5 shadow-[0_12px_28px_rgba(47,20,47,0.1)]" :class="cardClass">
           <h2 class="text-lg font-700" :class="titleClass">想对你说</h2>
           <p class="mt-2 text-sm leading-relaxed">
