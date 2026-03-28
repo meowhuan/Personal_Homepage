@@ -624,13 +624,13 @@ const onProjectsPointerUp = (event) => {
               style="--float-delay: 0.35s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
-              <h3 class="text-base font-600">Personal Homepage</h3>
+              <h3 class="text-base font-600">MeowKey</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                当前个人主页项目本体，包含首页、博客、友链以及在线状态相关功能，持续迭代中。
+                面向 RP2350 的 Passkey / CTAP2（FIDO）固件实现，提供标准 FIDO HID、可选 Debug HID 与配套管理工具。
               </p>
               <a
                 class="meow-pill motion-press mt-4 inline-flex"
-                href="https://github.com/meowhuan/Personal_Homepage"
+                href="https://github.com/meowhuan/MeowKey"
                 target="_blank"
                 rel="noreferrer"
               >

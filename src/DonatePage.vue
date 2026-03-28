@@ -42,7 +42,14 @@ const gratitudeList = ref([
     date: "2026-03-17 22:52:04",
     amount: 162,
     name: "姐姐",
+    channel: "爱发电",
     message: "世界最可爱的小天使，每天都要开心哦",
+  },
+  {
+    date: "2026-03-28 18:23:31",
+    amount: 15,
+    name: "梁逸",
+    channel: "爱发电",
   },
 ]);
 </script>
@@ -121,9 +128,9 @@ const gratitudeList = ref([
             >
               <div class="font-600" :class="titleClass">{{ index + 1 }}. {{ item.name }}</div>
               <div class="mt-1 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
-                {{ item.date }} · 爱发电赞助 {{ item.amount }} 元
+                {{ item.date }} · {{ item.channel || "爱发电" }}赞助 {{ item.amount }} 元
               </div>
-              <div class="mt-1 text-sm">留言：{{ item.message }}</div>
+              <div v-if="item.message" class="mt-1 text-sm">留言：{{ item.message }}</div>
             </li>
           </ul>
           <div
