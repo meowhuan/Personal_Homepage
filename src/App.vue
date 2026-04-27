@@ -896,6 +896,15 @@ const onProjectsPointerUp = (event) => {
           ·
           <a
             class="underline underline-offset-4"
+            href="https://beian.miit.gov.cn/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            鲁ICP备2026020825号
+          </a>
+          ·
+          <a
+            class="underline underline-offset-4"
             href="https://icp.gov.moe/?keyword=20261211"
             target="_blank"
             rel="noreferrer"

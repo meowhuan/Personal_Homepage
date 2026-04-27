@@ -167,6 +167,18 @@ const gratitudeList = ref([
         </article>
       </section>
 
+      <footer class="mt-16 text-center text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+        © 2026 Meowhuan ·
+        <a
+          class="underline underline-offset-4"
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          鲁ICP备2026020825号
+        </a>
+      </footer>
+
     </main>
   </div>
 </template>
