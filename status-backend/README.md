@@ -137,6 +137,7 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 - `GET /links/settings` (token)
 - `POST /links/settings` (token)
 - `POST /links/settings/test-smtp` (token)
+- `POST /links/settings/test-imap` (token)
 - `GET /links/review/report/tasks` (review token)
 - `POST /links/review/report/decision` (review token)
 - `POST /links/review/report/manual` (review token)

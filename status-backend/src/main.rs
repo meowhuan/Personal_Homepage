@@ -433,6 +433,11 @@ struct SmtpTestPayload {
 }
 
 #[derive(Deserialize)]
+struct ImapTestPayload {
+    poll_marker: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct ReviewDecisionReportPayload {
     application_id: i64,
     action: String,
@@ -842,6 +847,7 @@ async fn main() {
             get(links_settings_get).post(links_settings_set),
         )
         .route("/links/settings/test-smtp", post(links_settings_test_smtp))
+        .route("/links/settings/test-imap", post(links_settings_test_imap))
         .route("/links/review/report/tasks", get(links_review_report_tasks))
         .route(
             "/links/review/report/decision",
@@ -2685,7 +2691,10 @@ async fn links_review_report_tasks(
              ORDER BY created_at ASC",
         ) {
             Ok(stmt) => stmt,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(err) => {
+                tracing::error!("prepare pending review tasks failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         };
         let rows = match stmt.query_map([], |row| {
             Ok(PendingApplicationTask {
@@ -2699,7 +2708,10 @@ async fn links_review_report_tasks(
             })
         }) {
             Ok(rows) => rows,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(err) => {
+                tracing::error!("query pending review tasks failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         };
         rows.filter_map(Result::ok).collect::<Vec<_>>()
     };
@@ -2709,10 +2721,13 @@ async fn links_review_report_tasks(
             "SELECT l.id, l.url, l.application_id, l.backlink_deadline, a.backlink_page_url
              FROM friend_links l
              LEFT JOIN friend_link_applications a ON a.id = l.application_id
-             ORDER BY created_at ASC",
+             ORDER BY l.created_at ASC",
         ) {
             Ok(stmt) => stmt,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(err) => {
+                tracing::error!("prepare active link tasks failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         };
         let rows = match stmt.query_map([], |row| {
             Ok(ActiveLinkTask {
@@ -2724,7 +2739,10 @@ async fn links_review_report_tasks(
             })
         }) {
             Ok(rows) => rows,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            Err(err) => {
+                tracing::error!("query active link tasks failed: {}", err);
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
         };
         rows.filter_map(Result::ok).collect::<Vec<_>>()
     };
@@ -3586,6 +3604,40 @@ async fn links_settings_test_smtp(
     }
 }
 
+async fn links_settings_test_imap(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ImapTestPayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mail_reply_cfg = {
+        let conn = state.db.lock().unwrap();
+        state.mail_reply.runtime_config(&conn)
+    };
+    let Some(imap_cfg) = mail_reply_cfg.imap.as_ref() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiMessage {
+                message: "IMAP 未配置完整，请先保存 IMAP Host/User/Pass".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    let poll_marker = payload.poll_marker.unwrap_or(true);
+    match test_imap_config(imap_cfg, poll_marker).await {
+        Ok(message) => (StatusCode::OK, Json(ApiMessage { message })).into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ApiMessage {
+                message: format!("IMAP 测试失败: {}", err),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn remove_link_and_notify(
     state: &AppState,
     link_id: String,
@@ -3871,12 +3923,28 @@ async fn fetch_recent_reply_mails(cfg: &ImapConfig) -> Result<Vec<ParsedReplyMai
     }
 }
 
+async fn test_imap_config(cfg: &ImapConfig, poll_marker: bool) -> Result<String, String> {
+    if cfg.use_tls {
+        test_imap_config_tls(cfg, poll_marker).await
+    } else {
+        test_imap_config_plain(cfg, poll_marker).await
+    }
+}
+
 async fn fetch_recent_reply_mails_plain(cfg: &ImapConfig) -> Result<Vec<ParsedReplyMail>, String> {
     let stream = tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port))
         .await
         .map_err(|e| format!("imap connect failed: {}", e))?;
     let mut session = ImapSession::new(Box::pin(stream));
     run_imap_fetch(&mut session, cfg).await
+}
+
+async fn test_imap_config_plain(cfg: &ImapConfig, poll_marker: bool) -> Result<String, String> {
+    let stream = tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port))
+        .await
+        .map_err(|e| format!("imap connect failed: {}", e))?;
+    let mut session = ImapSession::new(Box::pin(stream));
+    run_imap_test(&mut session, cfg, poll_marker).await
 }
 
 async fn fetch_recent_reply_mails_tls(cfg: &ImapConfig) -> Result<Vec<ParsedReplyMail>, String> {
@@ -3900,6 +3968,29 @@ async fn fetch_recent_reply_mails_tls(cfg: &ImapConfig) -> Result<Vec<ParsedRepl
         .map_err(|e| format!("imap tls handshake failed: {}", e))?;
     let mut session = ImapSession::new(Box::pin(stream));
     run_imap_fetch(&mut session, cfg).await
+}
+
+async fn test_imap_config_tls(cfg: &ImapConfig, poll_marker: bool) -> Result<String, String> {
+    let stream = tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port))
+        .await
+        .map_err(|e| format!("imap tls connect failed: {}", e))?;
+    let mut root_store = RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let server_name = cfg
+        .host
+        .clone()
+        .try_into()
+        .map_err(|_| "imap host is not a valid tls server name".to_string())?;
+    let stream = connector
+        .connect(server_name, stream)
+        .await
+        .map_err(|e| format!("imap tls handshake failed: {}", e))?;
+    let mut session = ImapSession::new(Box::pin(stream));
+    run_imap_test(&mut session, cfg, poll_marker).await
 }
 
 trait AsyncReadWrite: AsyncRead + AsyncWrite {}
@@ -3977,10 +4068,11 @@ impl ImapSession {
                 if ok {
                     return Ok(lines);
                 }
-                return Err(lines
+                let last = lines
                     .last()
                     .cloned()
-                    .unwrap_or_else(|| "imap command failed".to_string()));
+                    .unwrap_or_else(|| "imap command failed".to_string());
+                return Err(format!("imap command `{}` failed: {}", command, last));
             }
         }
     }
@@ -4000,10 +4092,7 @@ async fn run_imap_fetch(
     session
         .command(&format!("SELECT {}", quote_imap_atom(&cfg.mailbox)))
         .await?;
-    let search_lines = session
-        .command("UID SEARCH UNSEEN TEXT \"MEOW-LINK-APP\"")
-        .await?;
-    let mut uids = parse_uid_search_result(&search_lines);
+    let mut uids = search_reply_candidate_uids(session).await?;
     if uids.len() > 20 {
         uids = uids[uids.len().saturating_sub(20)..].to_vec();
     }
@@ -4029,6 +4118,55 @@ async fn run_imap_fetch(
     }
     let _ = session.command("LOGOUT").await;
     Ok(out)
+}
+
+async fn search_reply_candidate_uids(session: &mut ImapSession) -> Result<Vec<u64>, String> {
+    match session
+        .command("UID SEARCH UNSEEN TEXT \"MEOW-LINK-APP\"")
+        .await
+    {
+        Ok(lines) => Ok(parse_uid_search_result(&lines)),
+        Err(err) => {
+            tracing::warn!(
+                "imap server rejected TEXT search, falling back to UID SEARCH UNSEEN: {}",
+                err
+            );
+            let lines = session.command("UID SEARCH UNSEEN").await?;
+            Ok(parse_uid_search_result(&lines))
+        }
+    }
+}
+
+async fn run_imap_test(
+    session: &mut ImapSession,
+    cfg: &ImapConfig,
+    poll_marker: bool,
+) -> Result<String, String> {
+    session.read_greeting().await?;
+    let login = format!(
+        "LOGIN {} {}",
+        quote_imap_atom(&cfg.username),
+        quote_imap_atom(&cfg.password)
+    );
+    session.command(&login).await?;
+    let select_lines = session
+        .command(&format!("SELECT {}", quote_imap_atom(&cfg.mailbox)))
+        .await?;
+    let exists_count = parse_select_exists_count(&select_lines).unwrap_or(0);
+    let unseen_count = parse_select_unseen_count(&select_lines).unwrap_or(0);
+    let marker_count = if poll_marker {
+        Some(search_reply_candidate_uids(session).await?.len())
+    } else {
+        None
+    };
+    let _ = session.command("LOGOUT").await;
+    let marker_text = marker_count
+        .map(|v| format!("，未读友链回复候选 {} 封", v))
+        .unwrap_or_default();
+    Ok(format!(
+        "IMAP 测试成功：{}:{}，邮箱 {}，总邮件约 {} 封，未读约 {} 封{}",
+        cfg.host, cfg.port, cfg.mailbox, exists_count, unseen_count, marker_text
+    ))
 }
 
 fn parse_imap_literal_size(line: &str) -> Option<usize> {
@@ -4058,6 +4196,34 @@ fn parse_uid_search_result(lines: &[String]) -> Vec<u64> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+fn parse_select_exists_count(lines: &[String]) -> Option<usize> {
+    for line in lines {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() >= 3 && parts[0] == "*" && parts[2].eq_ignore_ascii_case("EXISTS") {
+            if let Ok(count) = parts[1].parse::<usize>() {
+                return Some(count);
+            }
+        }
+    }
+    None
+}
+
+fn parse_select_unseen_count(lines: &[String]) -> Option<usize> {
+    for line in lines {
+        let upper = line.to_uppercase();
+        if let Some(pos) = upper.find("UNSEEN ") {
+            let digits = line[pos + 7..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>();
+            if let Ok(count) = digits.parse::<usize>() {
+                return Some(count);
+            }
+        }
+    }
+    None
 }
 
 fn extract_application_id_from_mail(text: &str) -> Option<i64> {

@@ -1,6 +1,30 @@
 #!/usr/bin/env node
 
-import { chromium } from "playwright";
+import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
+
+function loadPlaywright() {
+  const localRequire = createRequire(import.meta.url);
+  try {
+    return localRequire("playwright");
+  } catch (localErr) {
+    try {
+      const globalRoot = execSync("npm root -g", {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (globalRoot) {
+        return localRequire(path.join(globalRoot, "playwright"));
+      }
+    } catch {
+      // Fall through to the original, more useful local resolution error.
+    }
+    throw localErr;
+  }
+}
+
+const { chromium } = loadPlaywright();
 
 function argValue(name, fallback = "") {
   const idx = process.argv.indexOf(name);

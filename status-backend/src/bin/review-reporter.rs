@@ -143,7 +143,7 @@ async fn run_once_cycle(
     worker_config: &WorkerConfig,
 ) -> Result<(), String> {
     let mut state = load_state(state_file);
-    let tasks: ReviewTasksResponse = client
+    let tasks_resp = client
         .get(format!(
             "{}/links/review/report/tasks",
             base.trim_end_matches('/')
@@ -151,10 +151,26 @@ async fn run_once_cycle(
         .header("x-token", token)
         .send()
         .await
-        .map_err(|e| format!("fetch tasks failed: {}", e))?
-        .json()
+        .map_err(|e| format!("fetch tasks failed: {}", e))?;
+    let tasks_status = tasks_resp.status();
+    let tasks_body = tasks_resp
+        .text()
         .await
-        .map_err(|e| format!("decode tasks failed: {}", e))?;
+        .map_err(|e| format!("read tasks body failed: {}", e))?;
+    if !tasks_status.is_success() {
+        return Err(format!(
+            "fetch tasks http {} body={}",
+            tasks_status,
+            preview_body(&tasks_body)
+        ));
+    }
+    let tasks: ReviewTasksResponse = serde_json::from_str(&tasks_body).map_err(|e| {
+        format!(
+            "decode tasks failed: {}; body={}",
+            e,
+            preview_body(&tasks_body)
+        )
+    })?;
 
     for app in &tasks.pending_applications {
         let decision =
@@ -1113,9 +1129,74 @@ fn load_state(path: &PathBuf) -> LocalState {
     }
 }
 
+fn preview_body(body: &str) -> String {
+    let compact = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(500).collect()
+}
+
 fn save_state(path: &PathBuf, state: &LocalState) {
     if let Ok(text) = serde_json::to_string_pretty(state) {
         let _ = fs::write(path, text);
+    }
+}
+
+fn resolve_js_render_script_path(raw: &str) -> Option<String> {
+    let raw_path = PathBuf::from(raw);
+    let mut candidates = Vec::new();
+    if raw_path.is_absolute() {
+        candidates.push(raw_path);
+    } else {
+        if let Ok(cwd) = std::env::current_dir() {
+            candidates.push(cwd.join(&raw_path));
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                candidates.push(dir.join(&raw_path));
+                candidates.push(dir.join("scripts").join("playwright-fetch.mjs"));
+            }
+        }
+    }
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+    eprintln!(
+        "[review-worker] js_render disabled: script not found at {} (set REVIEW_JS_RENDER_SCRIPT or run from status-backend dir)",
+        raw
+    );
+    None
+}
+
+fn playwright_dependency_available(command: &str, script_path: &str) -> bool {
+    let script_dir = PathBuf::from(script_path)
+        .parent()
+        .map(|v| v.to_path_buf())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let output = std::process::Command::new(command)
+        .arg("-e")
+        .arg("const {execSync}=require('node:child_process');const {createRequire}=require('node:module');const path=require('node:path');const r=createRequire(process.cwd()+'/playwright-check.js');try{r('playwright');process.exit(0)}catch(e){try{const root=execSync('npm root -g',{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();r(path.join(root,'playwright'));process.exit(0)}catch(_){process.exit(1)}}")
+        .current_dir(&script_dir)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "[review-worker] js_render disabled: Node package 'playwright' is not available from {}. Run `npm install playwright` there, or set REVIEW_JS_RENDER=0. {}",
+                script_dir.display(),
+                stderr.trim()
+            );
+            false
+        }
+        Err(err) => {
+            eprintln!(
+                "[review-worker] js_render disabled: failed to run {} for Playwright check: {}",
+                command, err
+            );
+            false
+        }
     }
 }
 
@@ -1187,42 +1268,55 @@ impl WorkerConfig {
                 }),
             _ => None,
         };
-        let js_render = std::env::var("REVIEW_JS_RENDER")
+        let js_render_enabled = std::env::var("REVIEW_JS_RENDER")
             .ok()
             .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "True"))
-            .unwrap_or(false)
-            .then(|| JsRenderConfig {
-                command: std::env::var("REVIEW_JS_RENDER_CMD")
-                    .ok()
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(|| "node".to_string()),
-                script_path: std::env::var("REVIEW_JS_RENDER_SCRIPT")
-                    .ok()
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(|| "scripts/playwright-fetch.mjs".to_string()),
-                timeout_secs: std::env::var("REVIEW_JS_RENDER_TIMEOUT_SEC")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(18)
-                    .clamp(5, 60),
-                wait_until: std::env::var("REVIEW_JS_RENDER_WAIT_UNTIL")
-                    .ok()
-                    .map(|v| v.trim().to_lowercase())
-                    .filter(|v| matches!(v.as_str(), "load" | "domcontentloaded" | "networkidle"))
-                    .unwrap_or_else(|| "networkidle".to_string()),
-                wait_after_ms: std::env::var("REVIEW_JS_RENDER_WAIT_AFTER_MS")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(800)
-                    .clamp(0, 5000),
-                max_pages: std::env::var("REVIEW_JS_RENDER_MAX_PAGES")
-                    .ok()
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(2)
-                    .clamp(1, 8),
-            });
+            .unwrap_or(false);
+        let js_render = if js_render_enabled {
+            let script_path_raw = std::env::var("REVIEW_JS_RENDER_SCRIPT")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "scripts/playwright-fetch.mjs".to_string());
+            let command = std::env::var("REVIEW_JS_RENDER_CMD")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "node".to_string());
+            resolve_js_render_script_path(&script_path_raw).and_then(|script_path| {
+                if !playwright_dependency_available(&command, &script_path) {
+                    return None;
+                }
+                Some(JsRenderConfig {
+                    command,
+                    script_path,
+                    timeout_secs: std::env::var("REVIEW_JS_RENDER_TIMEOUT_SEC")
+                        .ok()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(18)
+                        .clamp(5, 60),
+                    wait_until: std::env::var("REVIEW_JS_RENDER_WAIT_UNTIL")
+                        .ok()
+                        .map(|v| v.trim().to_lowercase())
+                        .filter(|v| {
+                            matches!(v.as_str(), "load" | "domcontentloaded" | "networkidle")
+                        })
+                        .unwrap_or_else(|| "networkidle".to_string()),
+                    wait_after_ms: std::env::var("REVIEW_JS_RENDER_WAIT_AFTER_MS")
+                        .ok()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(800)
+                        .clamp(0, 5000),
+                    max_pages: std::env::var("REVIEW_JS_RENDER_MAX_PAGES")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(2)
+                        .clamp(1, 8),
+                })
+            })
+        } else {
+            None
+        };
         Self {
             seo_provider,
             js_render,
