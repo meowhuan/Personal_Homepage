@@ -122,6 +122,9 @@ REVIEW_REPORT_TOKEN="your_report_token" \
 ./target/release/review-reporter
 ```
 
+Windows 直接双击/PowerShell 运行时也会读取当前目录或 `status-backend/.env`；如需指定配置文件，可设置 `STATUS_ENV_FILE=F:\path\to\.env`。
+On Windows, direct PowerShell runs also load `.env` from the current directory or `status-backend/.env`; set `STATUS_ENV_FILE=F:\path\to\.env` to override.
+
 ### 7.3 systemd（Linux）/ systemd Service
 
 创建 `/etc/systemd/system/review-reporter.service`：

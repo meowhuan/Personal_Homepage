@@ -1,4 +1,5 @@
 mod admin_pages;
+mod env_loader;
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
@@ -18,16 +19,22 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio_rustls::{
+    rustls::{ClientConfig, RootCertStore},
+    TlsConnector,
+};
+use tower_http::cors::{Any, CorsLayer};
+use tracing_subscriber::EnvFilter;
 use trust_dns_resolver::{
     config::{ResolverConfig, ResolverOpts},
     lookup::TxtLookup,
     TokioAsyncResolver,
 };
-use tower_http::cors::{Any, CorsLayer};
-use tracing_subscriber::EnvFilter;
 
 const VERIFY_EXPIRED_CLEANUP_GRACE_SECS: i64 = 12 * 60 * 60;
 
@@ -39,6 +46,7 @@ struct AppState {
     notifier: Arc<Notifier>,
     auto_review: Arc<AutoReviewConfig>,
     anti_abuse: Arc<AntiAbuseConfig>,
+    mail_reply: Arc<MailReplyConfig>,
 }
 
 #[derive(Deserialize)]
@@ -248,6 +256,8 @@ struct LinkApplication {
     verify_deadline: Option<i64>,
     verify_http_at: Option<i64>,
     verify_email_at: Option<i64>,
+    backlink_page_url: Option<String>,
+    backlink_page_updated_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
 }
@@ -320,6 +330,12 @@ struct LinkReviewStageCancelPayload {
     id: String,
 }
 
+#[derive(Deserialize)]
+struct LinkBacklinkPagePayload {
+    application_id: i64,
+    backlink_page_url: String,
+}
+
 #[derive(Serialize)]
 struct LinkSettingsResponse {
     tg_bot_token: Option<String>,
@@ -345,6 +361,14 @@ struct LinkSettingsResponse {
     verify_window_minutes: i64,
     public_base_url: Option<String>,
     unreachable_whitelist_hosts: Option<String>,
+    imap_host: Option<String>,
+    imap_port: Option<u16>,
+    imap_user: Option<String>,
+    imap_pass_set: bool,
+    imap_mailbox: Option<String>,
+    imap_tls: bool,
+    imap_poll_enabled: bool,
+    imap_poll_interval_sec: i64,
 }
 
 #[derive(Deserialize)]
@@ -372,6 +396,14 @@ struct LinkSettingsPayload {
     verify_window_minutes: Option<i64>,
     public_base_url: Option<String>,
     unreachable_whitelist_hosts: Option<String>,
+    imap_host: Option<String>,
+    imap_port: Option<u16>,
+    imap_user: Option<String>,
+    imap_pass: Option<String>,
+    imap_mailbox: Option<String>,
+    imap_tls: Option<bool>,
+    imap_poll_enabled: Option<bool>,
+    imap_poll_interval_sec: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -445,6 +477,7 @@ struct PendingApplicationTask {
     avatar_url: Option<String>,
     description: Option<String>,
     note: Option<String>,
+    backlink_page_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -453,6 +486,7 @@ struct ActiveLinkTask {
     url: String,
     application_id: Option<i64>,
     backlink_deadline: Option<i64>,
+    backlink_page_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -478,6 +512,30 @@ struct RuntimeNotifyConfig {
     tg_bot_token: Option<String>,
     tg_chat_id: Option<String>,
     smtp: Option<SmtpConfig>,
+}
+
+#[derive(Clone)]
+struct MailReplyConfig {
+    imap: Option<ImapConfig>,
+    poll_enabled: bool,
+    poll_interval_secs: u64,
+}
+
+#[derive(Clone)]
+struct ImapConfig {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    mailbox: String,
+    use_tls: bool,
+}
+
+#[derive(Debug)]
+struct ParsedReplyMail {
+    uid: u64,
+    subject: String,
+    body: String,
 }
 
 #[derive(Clone)]
@@ -529,6 +587,7 @@ enum SmtpMode {
 
 #[tokio::main]
 async fn main() {
+    env_loader::load_env_files();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -546,6 +605,7 @@ async fn main() {
     let notifier = Arc::new(Notifier::from_env());
     let auto_review = Arc::new(AutoReviewConfig::from_env());
     let anti_abuse = Arc::new(AntiAbuseConfig::from_env());
+    let mail_reply = Arc::new(MailReplyConfig::from_env());
 
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
@@ -620,6 +680,8 @@ async fn main() {
             verify_deadline INTEGER,
             verify_http_at INTEGER,
             verify_email_at INTEGER,
+            backlink_page_url TEXT,
+            backlink_page_updated_at INTEGER,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -677,6 +739,14 @@ async fn main() {
         [],
     );
     let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN backlink_page_url TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE friend_link_applications ADD COLUMN backlink_page_updated_at INTEGER",
+        [],
+    );
+    let _ = conn.execute(
         "ALTER TABLE friend_links ADD COLUMN application_id INTEGER",
         [],
     );
@@ -710,7 +780,9 @@ async fn main() {
         notifier,
         auto_review,
         anti_abuse,
+        mail_reply,
     };
+    spawn_mail_reply_worker(state.clone());
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -764,6 +836,7 @@ async fn main() {
             "/links/review/stage/cancel",
             post(links_review_stage_cancel),
         )
+        .route("/links/backlink-page", post(links_backlink_page_update))
         .route(
             "/links/settings",
             get(links_settings_get).post(links_settings_set),
@@ -1638,17 +1711,18 @@ async fn links_apply(
                 .into_response();
         }
         let site_host_count: i64 = {
-            let mut stmt = match conn.prepare(
-                "SELECT site_url FROM friend_link_applications WHERE created_at >= ?1",
-            ) {
+            let mut stmt = match conn
+                .prepare("SELECT site_url FROM friend_link_applications WHERE created_at >= ?1")
+            {
                 Ok(v) => v,
                 Err(_) => {
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             };
-            let rows = match stmt.query_map(params![now - anti_abuse.apply_rate_limit_window_secs], |row| {
-                row.get::<_, String>(0)
-            }) {
+            let rows = match stmt.query_map(
+                params![now - anti_abuse.apply_rate_limit_window_secs],
+                |row| row.get::<_, String>(0),
+            ) {
                 Ok(v) => v,
                 Err(_) => {
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -1856,7 +1930,10 @@ async fn links_verify_http(
     (
         StatusCode::OK,
         Json(ApiMessage {
-            message: format!("HTTP 验证通过，已进入审核队列（验证窗口 {}h）", remain_hours),
+            message: format!(
+                "HTTP 验证通过，已进入审核队列（验证窗口 {}h）",
+                remain_hours
+            ),
         }),
     )
         .into_response()
@@ -2069,7 +2146,13 @@ async fn links_verify_email_send(
     let verify_url = anti_abuse
         .public_base_url
         .as_deref()
-        .map(|base| format!("{}/links/verify/email?token={}", base.trim_end_matches('/'), new_token))
+        .map(|base| {
+            format!(
+                "{}/links/verify/email?token={}",
+                base.trim_end_matches('/'),
+                new_token
+            )
+        })
         .unwrap_or_else(|| format!("/links/verify/email?token={}", new_token));
     let plain = format!(
         "站点：{}\n请点击链接完成邮箱验证（完成后进入审核队列）：\n{}\n\n若链接无法点击，可复制 token：{}\n",
@@ -2338,7 +2421,8 @@ async fn links_applications(
     let conn = state.db.lock().unwrap();
     let mut stmt = match conn.prepare(
         "SELECT id, site_name, site_url, avatar_url, description, email, note, status,
-                ip, user_agent, review_note, verify_token, verify_deadline, verify_http_at, verify_email_at, created_at, updated_at
+                ip, user_agent, review_note, verify_token, verify_deadline, verify_http_at, verify_email_at,
+                backlink_page_url, backlink_page_updated_at, created_at, updated_at
          FROM friend_link_applications
          ORDER BY status IN ('pending','verify_pending') DESC, created_at DESC",
     ) {
@@ -2367,8 +2451,10 @@ async fn links_applications(
             verify_deadline: row.get(12)?,
             verify_http_at: row.get(13)?,
             verify_email_at: row.get(14)?,
-            created_at: row.get(15)?,
-            updated_at: row.get(16)?,
+            backlink_page_url: row.get(15)?,
+            backlink_page_updated_at: row.get(16)?,
+            created_at: row.get(17)?,
+            updated_at: row.get(18)?,
         })
     }) {
         Ok(rows) => rows,
@@ -2399,6 +2485,33 @@ async fn links_review(
             }),
         )
             .into_response(),
+    }
+}
+
+async fn links_backlink_page_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LinkBacklinkPagePayload>,
+) -> impl IntoResponse {
+    if !authorized(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match store_backlink_page_url(
+        &state,
+        payload.application_id,
+        &payload.backlink_page_url,
+        "admin",
+    )
+    .await
+    {
+        Ok(url) => (
+            StatusCode::OK,
+            Json(ApiMessage {
+                message: format!("已记录友链页：{}", url),
+            }),
+        )
+            .into_response(),
+        Err(err) => (StatusCode::BAD_REQUEST, Json(ApiMessage { message: err })).into_response(),
     }
 }
 
@@ -2566,7 +2679,7 @@ async fn links_review_report_tasks(
 
     let pending_applications = {
         let mut stmt = match conn.prepare(
-            "SELECT id, site_name, site_url, avatar_url, description, note
+            "SELECT id, site_name, site_url, avatar_url, description, note, backlink_page_url
              FROM friend_link_applications
              WHERE status = 'pending'
              ORDER BY created_at ASC",
@@ -2582,6 +2695,7 @@ async fn links_review_report_tasks(
                 avatar_url: row.get(3)?,
                 description: row.get(4)?,
                 note: row.get(5)?,
+                backlink_page_url: row.get(6)?,
             })
         }) {
             Ok(rows) => rows,
@@ -2592,8 +2706,9 @@ async fn links_review_report_tasks(
 
     let active_links = {
         let mut stmt = match conn.prepare(
-            "SELECT id, url, application_id, backlink_deadline
-             FROM friend_links
+            "SELECT l.id, l.url, l.application_id, l.backlink_deadline, a.backlink_page_url
+             FROM friend_links l
+             LEFT JOIN friend_link_applications a ON a.id = l.application_id
              ORDER BY created_at ASC",
         ) {
             Ok(stmt) => stmt,
@@ -2605,6 +2720,7 @@ async fn links_review_report_tasks(
                 url: row.get(1)?,
                 application_id: row.get(2)?,
                 backlink_deadline: row.get(3)?,
+                backlink_page_url: row.get(4)?,
             })
         }) {
             Ok(rows) => rows,
@@ -2726,11 +2842,10 @@ async fn perform_review_decision(
             applicant_email,
             status,
             existing_review_note,
-        ) =
-            match app_row {
-                Some(v) => v,
-                None => return Err("申请记录不存在".to_string()),
-            };
+        ) = match app_row {
+            Some(v) => v,
+            None => return Err("申请记录不存在".to_string()),
+        };
         if action == "approve" && status == "verify_pending" {
             return Err("该申请尚未验证，请先验证或手动放行进入自动审查".to_string());
         }
@@ -2846,6 +2961,7 @@ async fn perform_review_decision(
                 .notify_review_result_email(
                     notify_cfg.smtp.as_ref(),
                     email,
+                    payload.application_id,
                     &site_name,
                     &site_url,
                     &action,
@@ -3279,6 +3395,54 @@ async fn links_settings_set(
                 .unreachable_whitelist_hosts
                 .map(|v| v.trim().chars().take(1024).collect::<String>()),
         ),
+        (
+            "imap_host",
+            payload
+                .imap_host
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
+        ),
+        ("imap_port", payload.imap_port.map(|v| v.to_string())),
+        (
+            "imap_user",
+            payload
+                .imap_user
+                .map(|v| v.trim().chars().take(255).collect::<String>()),
+        ),
+        (
+            "imap_pass",
+            payload.imap_pass.map(|v| {
+                let trimmed = v.trim();
+                if trimmed == "-" {
+                    String::new()
+                } else {
+                    trimmed.to_string()
+                }
+            }),
+        ),
+        (
+            "imap_mailbox",
+            payload
+                .imap_mailbox
+                .map(|v| v.trim().chars().take(128).collect::<String>()),
+        ),
+        (
+            "imap_tls",
+            payload
+                .imap_tls
+                .map(|v| if v { "1".to_string() } else { "0".to_string() }),
+        ),
+        (
+            "imap_poll_enabled",
+            payload
+                .imap_poll_enabled
+                .map(|v| if v { "1".to_string() } else { "0".to_string() }),
+        ),
+        (
+            "imap_poll_interval_sec",
+            payload
+                .imap_poll_interval_sec
+                .map(|v| v.clamp(60, 3600).to_string()),
+        ),
     ];
     for (key, value) in updates {
         if let Some(value) = value {
@@ -3326,13 +3490,25 @@ async fn links_apply_config(State(state): State<AppState>) -> impl IntoResponse 
             })
             .unwrap_or_default();
         let site_key = read_setting(&conn, "captcha_site_key")
-            .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.site_key.clone()))
+            .or_else(|| {
+                state
+                    .anti_abuse
+                    .captcha
+                    .as_ref()
+                    .map(|cfg| cfg.site_key.clone())
+            })
             .unwrap_or_default();
         let secret_set = if provider.trim().eq_ignore_ascii_case("altcha") {
             true
         } else {
             read_setting(&conn, "captcha_secret")
-                .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.secret.clone()))
+                .or_else(|| {
+                    state
+                        .anti_abuse
+                        .captcha
+                        .as_ref()
+                        .map(|cfg| cfg.secret.clone())
+                })
                 .map(|v| !v.is_empty())
                 .unwrap_or(false)
         };
@@ -3342,8 +3518,16 @@ async fn links_apply_config(State(state): State<AppState>) -> impl IntoResponse 
     let site_key = site_key.trim().to_string();
     let captcha_enabled = !provider.is_empty() && !site_key.is_empty();
     let response = LinkApplyConfigResponse {
-        captcha_provider: if provider.is_empty() { None } else { Some(provider) },
-        captcha_site_key: if site_key.is_empty() { None } else { Some(site_key) },
+        captcha_provider: if provider.is_empty() {
+            None
+        } else {
+            Some(provider)
+        },
+        captcha_site_key: if site_key.is_empty() {
+            None
+        } else {
+            Some(site_key)
+        },
         captcha_enabled,
         captcha_secret_set: Some(secret_set),
     };
@@ -3445,6 +3629,7 @@ async fn remove_link_and_notify(
     if send_email {
         if let Some((email, app_name, app_url)) = applicant {
             if let Some(email) = normalize_optional(email, 128) {
+                let app_id = application_id.unwrap_or(0);
                 let notify_cfg = {
                     let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
                     state.notifier.runtime_config(&conn)
@@ -3454,6 +3639,7 @@ async fn remove_link_and_notify(
                     .notify_review_result_email(
                         notify_cfg.smtp.as_ref(),
                         &email,
+                        app_id,
                         &app_name,
                         &app_url,
                         "reject",
@@ -3468,6 +3654,567 @@ async fn remove_link_and_notify(
         }
     }
     Ok(())
+}
+
+async fn store_backlink_page_url(
+    state: &AppState,
+    application_id: i64,
+    raw_url: &str,
+    source: &str,
+) -> Result<String, String> {
+    let (site_url, status, existing_note) = {
+        let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+        conn.query_row(
+            "SELECT site_url, status, review_note FROM friend_link_applications WHERE id = ?1",
+            params![application_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| "申请记录不存在".to_string())?
+    };
+    if !matches!(
+        status.as_str(),
+        "pending" | "approve" | "reject" | "removed_no_backlink" | "removed_external_review"
+    ) {
+        return Err("该申请当前状态不支持补充友链页".to_string());
+    }
+    let normalized_url = normalize_backlink_page_url(raw_url, &site_url)?;
+    let now = now_ts();
+    let should_requeue = matches!(
+        status.as_str(),
+        "reject" | "removed_no_backlink" | "removed_external_review"
+    ) && (source == "admin"
+        || status == "removed_no_backlink"
+        || note_mentions_no_backlink(existing_note.as_deref()));
+    let note_line = if should_requeue {
+        format!(
+            "补充友链页({}): {}；已重新进入自动审查队列",
+            source, normalized_url
+        )
+    } else {
+        format!("补充友链页({}): {}", source, normalized_url)
+    };
+    let review_note = append_review_note(existing_note, &note_line, 720);
+    let next_status = if should_requeue {
+        "pending"
+    } else {
+        status.as_str()
+    };
+    {
+        let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+        let changed = conn
+            .execute(
+                "UPDATE friend_link_applications
+                 SET backlink_page_url = ?1,
+                     backlink_page_updated_at = ?2,
+                     review_note = ?3,
+                     status = ?4,
+                     updated_at = ?5
+                 WHERE id = ?6",
+                params![
+                    normalized_url,
+                    now,
+                    review_note,
+                    next_status,
+                    now,
+                    application_id
+                ],
+            )
+            .unwrap_or(0);
+        if changed == 0 {
+            return Err("写入补充友链页失败".to_string());
+        }
+        let _ = conn.execute(
+            "UPDATE friend_links
+             SET backlink_status = 'pending',
+                 backlink_deadline = COALESCE(backlink_deadline, ?1),
+                 backlink_checked_at = NULL
+             WHERE application_id = ?2",
+            params![
+                now + state.auto_review.backlink_window_secs.max(3600),
+                application_id
+            ],
+        );
+    }
+    Ok(normalized_url)
+}
+
+fn note_mentions_no_backlink(note: Option<&str>) -> bool {
+    note.map(|v| {
+        let lower = v.to_lowercase();
+        lower.contains("未检测到本站链接") || lower.contains("no_backlink")
+    })
+    .unwrap_or(false)
+}
+
+fn append_review_note(existing: Option<String>, line: &str, max_chars: usize) -> String {
+    let line = line.trim();
+    let merged = match normalize_optional(existing, max_chars) {
+        Some(existing) if existing.contains(line) => existing,
+        Some(existing) => format!("{}\n{}", existing, line),
+        None => line.to_string(),
+    };
+    merged.chars().take(max_chars).collect()
+}
+
+fn normalize_backlink_page_url(raw_url: &str, site_url: &str) -> Result<String, String> {
+    let candidate = sanitize_candidate_url(raw_url).ok_or_else(|| "友链页链接为空".to_string())?;
+    let parsed = Url::parse(&candidate).map_err(|_| "友链页链接格式不正确".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("友链页链接必须是 http/https".to_string());
+    }
+    let site_host = Url::parse(site_url)
+        .ok()
+        .and_then(|u| u.host_str().map(normalize_host))
+        .ok_or_else(|| "申请站点链接无效".to_string())?;
+    let candidate_host = parsed
+        .host_str()
+        .map(normalize_host)
+        .ok_or_else(|| "友链页链接缺少域名".to_string())?;
+    if candidate_host != site_host && !candidate_host.ends_with(&format!(".{}", site_host)) {
+        return Err("友链页链接必须属于申请站点域名".to_string());
+    }
+    let mut clean = parsed;
+    clean.set_fragment(None);
+    Ok(clean.to_string())
+}
+
+fn sanitize_candidate_url(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c: char| {
+            matches!(
+                c,
+                '<' | '>' | '"' | '\'' | ')' | ']' | '}' | ',' | ';' | '，' | '。' | '、'
+            )
+        })
+        .trim_end_matches('.');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn spawn_mail_reply_worker(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = process_mail_replies_once(&state).await {
+                tracing::warn!("mail reply poll failed: {}", err);
+            }
+            let interval_secs = current_mail_reply_interval_secs(&state);
+            let interval = Duration::from_secs(interval_secs.max(60));
+            tokio::time::sleep(interval).await;
+        }
+    });
+}
+
+fn current_mail_reply_interval_secs(state: &AppState) -> u64 {
+    let Ok(conn) = state.db.lock() else {
+        return state.mail_reply.poll_interval_secs;
+    };
+    state.mail_reply.runtime_config(&conn).poll_interval_secs
+}
+
+async fn process_mail_replies_once(state: &AppState) -> Result<(), String> {
+    let mail_reply_cfg = {
+        let conn = state.db.lock().map_err(|_| "db lock failed".to_string())?;
+        state.mail_reply.runtime_config(&conn)
+    };
+    if !mail_reply_cfg.poll_enabled {
+        return Ok(());
+    };
+    let Some(imap_cfg) = mail_reply_cfg.imap else {
+        return Ok(());
+    };
+    let messages = fetch_recent_reply_mails(&imap_cfg).await?;
+    for message in messages {
+        let combined = format!("{}\n{}", message.subject, message.body);
+        let Some(application_id) = extract_application_id_from_mail(&combined) else {
+            continue;
+        };
+        let Some(url) = extract_first_http_url(&message.body) else {
+            continue;
+        };
+        match store_backlink_page_url(state, application_id, &url, "mail-reply").await {
+            Ok(stored_url) => {
+                tracing::info!(
+                    "stored backlink page from mail reply uid={} app#{} url={}",
+                    message.uid,
+                    application_id,
+                    stored_url
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "mail reply uid={} app#{} ignored: {}",
+                    message.uid,
+                    application_id,
+                    err
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn fetch_recent_reply_mails(cfg: &ImapConfig) -> Result<Vec<ParsedReplyMail>, String> {
+    if cfg.use_tls {
+        fetch_recent_reply_mails_tls(cfg).await
+    } else {
+        fetch_recent_reply_mails_plain(cfg).await
+    }
+}
+
+async fn fetch_recent_reply_mails_plain(cfg: &ImapConfig) -> Result<Vec<ParsedReplyMail>, String> {
+    let stream = tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port))
+        .await
+        .map_err(|e| format!("imap connect failed: {}", e))?;
+    let mut session = ImapSession::new(Box::pin(stream));
+    run_imap_fetch(&mut session, cfg).await
+}
+
+async fn fetch_recent_reply_mails_tls(cfg: &ImapConfig) -> Result<Vec<ParsedReplyMail>, String> {
+    let stream = tokio::net::TcpStream::connect((cfg.host.as_str(), cfg.port))
+        .await
+        .map_err(|e| format!("imap tls connect failed: {}", e))?;
+    let mut root_store = RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let server_name = cfg
+        .host
+        .clone()
+        .try_into()
+        .map_err(|_| "imap host is not a valid tls server name".to_string())?;
+    let stream = connector
+        .connect(server_name, stream)
+        .await
+        .map_err(|e| format!("imap tls handshake failed: {}", e))?;
+    let mut session = ImapSession::new(Box::pin(stream));
+    run_imap_fetch(&mut session, cfg).await
+}
+
+trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite + ?Sized> AsyncReadWrite for T {}
+
+type ImapStream = Pin<Box<dyn AsyncReadWrite + Send>>;
+
+struct ImapSession {
+    reader: BufReader<ImapStream>,
+    tag_counter: u64,
+}
+
+impl ImapSession {
+    fn new(stream: ImapStream) -> Self {
+        Self {
+            reader: BufReader::new(stream),
+            tag_counter: 0,
+        }
+    }
+
+    async fn read_greeting(&mut self) -> Result<(), String> {
+        let mut line = String::new();
+        self.reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("imap greeting failed: {}", e))?;
+        if line.starts_with("* OK") || line.starts_with("* PREAUTH") {
+            Ok(())
+        } else {
+            Err(format!("imap bad greeting: {}", line.trim()))
+        }
+    }
+
+    async fn command(&mut self, command: &str) -> Result<Vec<String>, String> {
+        self.tag_counter += 1;
+        let tag = format!("A{:04}", self.tag_counter);
+        let wire = format!("{} {}\r\n", tag, command);
+        self.reader
+            .get_mut()
+            .write_all(wire.as_bytes())
+            .await
+            .map_err(|e| format!("imap write failed: {}", e))?;
+        self.reader
+            .get_mut()
+            .flush()
+            .await
+            .map_err(|e| format!("imap flush failed: {}", e))?;
+
+        let mut lines = Vec::new();
+        loop {
+            let mut line = String::new();
+            let n = self
+                .reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| format!("imap read failed: {}", e))?;
+            if n == 0 {
+                return Err("imap connection closed".to_string());
+            }
+            let trimmed = line.trim_end_matches(['\r', '\n']).to_string();
+            if let Some(size) = parse_imap_literal_size(&trimmed) {
+                let mut buf = vec![0u8; size];
+                self.reader
+                    .read_exact(&mut buf)
+                    .await
+                    .map_err(|e| format!("imap literal read failed: {}", e))?;
+                lines.push(trimmed);
+                lines.push(String::from_utf8_lossy(&buf).to_string());
+                continue;
+            }
+            let done = trimmed.starts_with(&format!("{} ", tag));
+            let ok = trimmed.starts_with(&format!("{} OK", tag));
+            lines.push(trimmed);
+            if done {
+                if ok {
+                    return Ok(lines);
+                }
+                return Err(lines
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| "imap command failed".to_string()));
+            }
+        }
+    }
+}
+
+async fn run_imap_fetch(
+    session: &mut ImapSession,
+    cfg: &ImapConfig,
+) -> Result<Vec<ParsedReplyMail>, String> {
+    session.read_greeting().await?;
+    let login = format!(
+        "LOGIN {} {}",
+        quote_imap_atom(&cfg.username),
+        quote_imap_atom(&cfg.password)
+    );
+    session.command(&login).await?;
+    session
+        .command(&format!("SELECT {}", quote_imap_atom(&cfg.mailbox)))
+        .await?;
+    let search_lines = session
+        .command("UID SEARCH UNSEEN TEXT \"MEOW-LINK-APP\"")
+        .await?;
+    let mut uids = parse_uid_search_result(&search_lines);
+    if uids.len() > 20 {
+        uids = uids[uids.len().saturating_sub(20)..].to_vec();
+    }
+    let mut out = Vec::new();
+    for uid in uids {
+        let lines = session
+            .command(&format!(
+                "UID FETCH {} (BODY.PEEK[HEADER.FIELDS (SUBJECT)] BODY.PEEK[TEXT])",
+                uid
+            ))
+            .await?;
+        let raw = lines.join("\n");
+        let subject = decode_header_value(
+            extract_header_field(&raw, "Subject")
+                .as_deref()
+                .unwrap_or(""),
+        );
+        let body = decode_mail_body(&extract_imap_text_literal(&lines).unwrap_or(raw));
+        out.push(ParsedReplyMail { uid, subject, body });
+        let _ = session
+            .command(&format!("UID STORE {} +FLAGS.SILENT (\\Seen)", uid))
+            .await;
+    }
+    let _ = session.command("LOGOUT").await;
+    Ok(out)
+}
+
+fn parse_imap_literal_size(line: &str) -> Option<usize> {
+    let start = line.rfind('{')?;
+    let end = line[start + 1..].find('}')? + start + 1;
+    line[start + 1..end].parse::<usize>().ok()
+}
+
+fn quote_imap_atom(raw: &str) -> String {
+    let escaped = raw.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
+fn parse_uid_search_result(lines: &[String]) -> Vec<u64> {
+    let mut out = Vec::new();
+    for line in lines {
+        let upper = line.to_uppercase();
+        if !upper.starts_with("* SEARCH") {
+            continue;
+        }
+        for part in line.split_whitespace().skip(2) {
+            if let Ok(uid) = part.parse::<u64>() {
+                out.push(uid);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn extract_application_id_from_mail(text: &str) -> Option<i64> {
+    for marker in ["MEOW-LINK-APP:", "MEOW-LINK-APP #", "MEOW-LINK-APP#"] {
+        if let Some(pos) = text.find(marker) {
+            let tail = &text[pos + marker.len()..];
+            let digits: String = tail
+                .chars()
+                .skip_while(|c| c.is_whitespace())
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(id) = digits.parse::<i64>() {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
+fn extract_first_http_url(text: &str) -> Option<String> {
+    for token in text.split_whitespace() {
+        let token = token.trim_start_matches("URL:");
+        let Some(start) = token.find("http://").or_else(|| token.find("https://")) else {
+            continue;
+        };
+        let mut candidate = token[start..].to_string();
+        if let Some(end) = candidate.find(|c: char| c == '<' || c == '"' || c == '\'') {
+            candidate.truncate(end);
+        }
+        if let Some(url) = sanitize_candidate_url(&candidate) {
+            return Some(url);
+        }
+    }
+    None
+}
+
+fn extract_header_field(raw: &str, field: &str) -> Option<String> {
+    let mut out = String::new();
+    let prefix = format!("{}:", field.to_lowercase());
+    let mut collecting = false;
+    for line in raw.lines() {
+        if collecting && (line.starts_with(' ') || line.starts_with('\t')) {
+            out.push(' ');
+            out.push_str(line.trim());
+            continue;
+        }
+        if line.to_lowercase().starts_with(&prefix) {
+            collecting = true;
+            out = line[prefix.len()..].trim().to_string();
+            continue;
+        }
+        if collecting {
+            break;
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn extract_imap_text_literal(lines: &[String]) -> Option<String> {
+    let mut best = None;
+    for line in lines {
+        if line.contains("MEOW-LINK-APP") || line.contains("http://") || line.contains("https://") {
+            if !line.starts_with('*') && !line.starts_with('A') {
+                best = Some(line.clone());
+            }
+        }
+    }
+    best.or_else(|| {
+        lines
+            .iter()
+            .filter(|line| !line.starts_with('*') && !line.starts_with('A'))
+            .max_by_key(|line| line.len())
+            .cloned()
+    })
+}
+
+fn decode_header_value(raw: &str) -> String {
+    let mut out = String::new();
+    let mut rest = raw;
+    loop {
+        let Some(start) = rest.find("=?") else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let Some(charset_end) = after_start.find('?') else {
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let charset = &after_start[..charset_end];
+        let after_charset = &after_start[charset_end + 1..];
+        let Some(encoding_end) = after_charset.find('?') else {
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let encoding = &after_charset[..encoding_end];
+        let after_encoding = &after_charset[encoding_end + 1..];
+        let Some(end) = after_encoding.find("?=") else {
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let encoded = &after_encoding[..end];
+        out.push_str(&decode_encoded_word(charset, encoding, encoded));
+        rest = &after_encoding[end + 2..];
+    }
+    out
+}
+
+fn decode_encoded_word(charset: &str, encoding: &str, encoded: &str) -> String {
+    let bytes = if encoding.eq_ignore_ascii_case("B") {
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).ok()
+    } else if encoding.eq_ignore_ascii_case("Q") {
+        let qp = encoded.replace('_', " ");
+        quoted_printable::decode(qp.as_bytes(), quoted_printable::ParseMode::Robust).ok()
+    } else {
+        None
+    };
+    let Some(bytes) = bytes else {
+        return encoded.to_string();
+    };
+    if charset.eq_ignore_ascii_case("utf-8") || charset.eq_ignore_ascii_case("us-ascii") {
+        String::from_utf8_lossy(&bytes).to_string()
+    } else {
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+}
+
+fn decode_mail_body(raw: &str) -> String {
+    let transfer_encoding = extract_header_field(raw, "Content-Transfer-Encoding")
+        .unwrap_or_default()
+        .to_lowercase();
+    let body = raw
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .or_else(|| raw.split_once("\n\n").map(|(_, body)| body))
+        .unwrap_or(raw);
+    if transfer_encoding.contains("base64") {
+        let compact: String = body.lines().map(str::trim).collect();
+        if let Ok(bytes) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, compact)
+        {
+            return String::from_utf8_lossy(&bytes).to_string();
+        }
+    }
+    if transfer_encoding.contains("quoted-printable") {
+        if let Ok(bytes) =
+            quoted_printable::decode(body.as_bytes(), quoted_printable::ParseMode::Robust)
+        {
+            return String::from_utf8_lossy(&bytes).to_string();
+        }
+    }
+    body.to_string()
 }
 
 async fn visitor_visit(
@@ -3628,6 +4375,7 @@ impl Notifier {
         &self,
         smtp_cfg: Option<&SmtpConfig>,
         applicant_email: &str,
+        application_id: i64,
         site_name: &str,
         site_url: &str,
         action: &str,
@@ -3644,7 +4392,7 @@ impl Notifier {
             .filter(|_| !suppress_backlink_reminder)
             .filter(|v| v.contains("未检测到本站链接") || v.contains("no_backlink"))
             .map(|_| {
-                "\n\n提醒：当前未检测到你的网站包含本站链接。\n请在站点首页添加本站友链后再提交/等待复核：\nhttps://www.meowra.cn/"
+                "\n\n提醒：当前未检测到你的网站包含本站链接。\n若本站链接位于独立友链页面，请直接回复本邮件并只附上该友链页面 URL，系统会自动补充给内网审查服务复查。\n本站链接：\nhttps://www.meowra.cn/"
             })
             .unwrap_or("");
         let review_scope_note = if action == "approve" {
@@ -3652,21 +4400,32 @@ impl Notifier {
         } else {
             ""
         };
-        let subject = format!("友链申请审核结果：{}", status_text);
+        let reply_note = if backlink_reminder.is_empty() {
+            "\n\n此邮件由系统自动发送。"
+        } else {
+            "\n\n可直接回复本邮件补充友链页 URL。"
+        };
+        let marker = format!("MEOW-LINK-APP:{}", application_id);
+        let subject = format!("友链申请审核结果：{} [{}]", status_text, marker);
         let plain_body = format!(
-            "你好，\n\n你提交的友链申请已完成审核。\n\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}{}{}\n\n此邮件由系统自动发送，请勿直接回复。",
+            "你好，\n\n你提交的友链申请已完成审核。\n\n申请编号：#{}\n站点名称：{}\n站点地址：{}\n审核结果：{}\n审核备注：{}{}{}\n\n{}{}",
+            application_id,
             site_name,
             site_url,
             status_text,
             review_note.unwrap_or("-"),
             backlink_reminder,
-            review_scope_note
+            review_scope_note,
+            marker,
+            reply_note
         );
         let html_body = build_review_result_html(
+            application_id,
             site_name,
             site_url,
             status_text,
             review_note.unwrap_or("-"),
+            &marker,
             if backlink_reminder.is_empty() {
                 None
             } else {
@@ -3677,6 +4436,7 @@ impl Notifier {
             } else {
                 Some(review_scope_note)
             },
+            !backlink_reminder.is_empty(),
         );
         self.send_smtp_rich(
             smtp_cfg,
@@ -3794,13 +4554,101 @@ impl Notifier {
     }
 }
 
+impl MailReplyConfig {
+    fn from_env() -> Self {
+        let imap_host = normalize_env("LINK_IMAP_HOST");
+        let imap_user = normalize_env("LINK_IMAP_USER");
+        let imap_pass = normalize_env("LINK_IMAP_PASS");
+        let imap_tls = std::env::var("LINK_IMAP_TLS")
+            .ok()
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+        let imap_port = std::env::var("LINK_IMAP_PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(if imap_tls { 993 } else { 143 });
+        let mailbox = normalize_env("LINK_IMAP_MAILBOX").unwrap_or_else(|| "INBOX".to_string());
+        let poll_enabled = std::env::var("LINK_IMAP_POLL_ENABLED")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let poll_interval_secs = std::env::var("LINK_IMAP_POLL_INTERVAL_SEC")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300)
+            .clamp(60, 3600);
+        let imap = match (imap_host, imap_user, imap_pass) {
+            (Some(host), Some(username), Some(password)) => Some(ImapConfig {
+                host,
+                port: imap_port,
+                username,
+                password,
+                mailbox,
+                use_tls: imap_tls,
+            }),
+            _ => None,
+        };
+        Self {
+            imap,
+            poll_enabled,
+            poll_interval_secs,
+        }
+    }
+
+    fn runtime_config(&self, conn: &Connection) -> Self {
+        let imap_tls = read_setting(conn, "imap_tls")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .or_else(|| self.imap.as_ref().map(|v| v.use_tls))
+            .unwrap_or(true);
+        let imap_host =
+            read_setting(conn, "imap_host").or_else(|| self.imap.as_ref().map(|v| v.host.clone()));
+        let imap_user = read_setting(conn, "imap_user")
+            .or_else(|| self.imap.as_ref().map(|v| v.username.clone()));
+        let imap_pass = read_setting(conn, "imap_pass")
+            .or_else(|| self.imap.as_ref().map(|v| v.password.clone()));
+        let imap_port = read_setting(conn, "imap_port")
+            .and_then(|v| v.parse::<u16>().ok())
+            .or_else(|| self.imap.as_ref().map(|v| v.port))
+            .unwrap_or(if imap_tls { 993 } else { 143 });
+        let imap_mailbox = read_setting(conn, "imap_mailbox")
+            .or_else(|| self.imap.as_ref().map(|v| v.mailbox.clone()))
+            .unwrap_or_else(|| "INBOX".to_string());
+        let poll_enabled = read_setting(conn, "imap_poll_enabled")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(self.poll_enabled);
+        let poll_interval_secs = read_setting(conn, "imap_poll_interval_sec")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(self.poll_interval_secs)
+            .clamp(60, 3600);
+        let imap = match (imap_host, imap_user, imap_pass) {
+            (Some(host), Some(username), Some(password)) => Some(ImapConfig {
+                host,
+                port: imap_port,
+                username,
+                password,
+                mailbox: imap_mailbox,
+                use_tls: imap_tls,
+            }),
+            _ => None,
+        };
+        Self {
+            imap,
+            poll_enabled,
+            poll_interval_secs,
+        }
+    }
+}
+
 fn build_review_result_html(
+    application_id: i64,
     site_name: &str,
     site_url: &str,
     status_text: &str,
     review_note: &str,
+    marker: &str,
     backlink_reminder: Option<&str>,
     review_scope_note: Option<&str>,
+    reply_allowed: bool,
 ) -> String {
     let status_color = if status_text == "已通过" {
         "#2f8a58"
@@ -3813,13 +4661,21 @@ fn build_review_result_html(
     let scope_html = review_scope_note
         .map(|v| format!(r#"<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#f6f4ff;color:#3d3567;line-height:1.6;">{}</div>"#, escape_html(v).replace('\n', "<br />")))
         .unwrap_or_default();
+    let footer = if reply_allowed {
+        "可直接回复本邮件补充友链页 URL。"
+    } else {
+        "此邮件由系统自动发送。"
+    };
     format!(
-        r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;"><div style="max-width:640px;margin:24px auto;padding:0 12px;"><div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);"><div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 审核通知</div><div style="padding:16px;"><div style="display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;">{status}</div><div style="margin-top:14px;line-height:1.75;"><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href="{url}" style="color:#5b4cc4;text-decoration:none;">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div>{reminder}{scope}<div style="margin-top:14px;font-size:12px;color:#7b6b7a;">此邮件由系统自动发送，请勿直接回复。</div></div></div></div></body></html>"#,
+        r#"<!doctype html><html><body style="margin:0;padding:0;background:#fdf7fb;font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#2b1d2a;"><div style="max-width:640px;margin:24px auto;padding:0 12px;"><div style="border:1px solid #eadbea;border-radius:18px;background:#ffffff;overflow:hidden;box-shadow:0 10px 26px rgba(84,34,86,0.08);"><div style="padding:14px 16px;background:linear-gradient(120deg,#ffe6f2,#f1f8ff);font-weight:700;letter-spacing:.2px;">Meow Links 审核通知</div><div style="padding:16px;"><div style="display:inline-block;padding:4px 10px;border-radius:999px;background:{status_color};color:#fff;font-size:12px;">{status}</div><div style="margin-top:14px;line-height:1.75;"><div><strong>申请编号：</strong>#{app_id}</div><div><strong>站点名称：</strong>{name}</div><div><strong>站点地址：</strong><a href="{url}" style="color:#5b4cc4;text-decoration:none;">{url}</a></div><div><strong>审核备注：</strong>{note}</div></div>{reminder}{scope}<div style="margin-top:14px;font-size:12px;color:#7b6b7a;">{marker}<br />{footer}</div></div></div></div></body></html>"#,
         status_color = status_color,
         status = escape_html(status_text),
+        app_id = application_id,
         name = escape_html(site_name),
         url = escape_html(site_url),
         note = escape_html(review_note),
+        marker = escape_html(marker),
+        footer = escape_html(footer),
         reminder = reminder_html,
         scope = scope_html,
     )
@@ -3898,8 +4754,8 @@ impl AutoReviewConfig {
 
 impl AntiAbuseConfig {
     fn from_env() -> Self {
-        let provider = normalize_env("LINK_CAPTCHA_PROVIDER")
-            .and_then(|v| CaptchaProvider::from_str(&v));
+        let provider =
+            normalize_env("LINK_CAPTCHA_PROVIDER").and_then(|v| CaptchaProvider::from_str(&v));
         let (site_key, secret) = match provider {
             Some(CaptchaProvider::Turnstile) => (
                 normalize_env("LINK_TURNSTILE_SITE_KEY"),
@@ -3993,12 +4849,11 @@ impl AntiAbuseConfig {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(3)
             .clamp(1, 20);
-        let verify_email_rate_limit_app_max =
-            std::env::var("LINK_VERIFY_EMAIL_RATE_LIMIT_APP_MAX")
-                .ok()
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(2)
-                .clamp(1, 10);
+        let verify_email_rate_limit_app_max = std::env::var("LINK_VERIFY_EMAIL_RATE_LIMIT_APP_MAX")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(2)
+            .clamp(1, 10);
         let verify_email_cooldown_secs = std::env::var("LINK_VERIFY_EMAIL_COOLDOWN_SEC")
             .ok()
             .and_then(|v| v.parse::<i64>().ok())
@@ -4229,7 +5084,8 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
     let edu_gov_email_block = read_setting(conn, "block_edu_gov_email")
         .map(|v| v != "0" && v.to_lowercase() != "false")
         .unwrap_or(defaults.edu_gov_email_block);
-    let deny_hosts_raw = read_setting(conn, "apply_deny_hosts").or_else(|| defaults.deny_hosts_raw.clone());
+    let deny_hosts_raw =
+        read_setting(conn, "apply_deny_hosts").or_else(|| defaults.deny_hosts_raw.clone());
     let deny_hosts = load_deny_hosts(deny_hosts_raw.as_deref());
     let verify_window_secs = read_setting(conn, "verify_window_minutes")
         .and_then(|v| v.parse::<i64>().ok())
@@ -4240,11 +5096,13 @@ fn resolve_anti_abuse_config(conn: &Connection, defaults: &AntiAbuseConfig) -> A
                 .map(|h| h.clamp(1, 48) * 3600)
         })
         .unwrap_or(defaults.verify_window_secs);
-    let public_base_url = read_setting(conn, "public_base_url").or_else(|| defaults.public_base_url.clone());
-    let verify_email_rate_limit_window_secs = read_setting(conn, "verify_email_rate_limit_window_sec")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(defaults.verify_email_rate_limit_window_secs)
-        .clamp(60, 86400);
+    let public_base_url =
+        read_setting(conn, "public_base_url").or_else(|| defaults.public_base_url.clone());
+    let verify_email_rate_limit_window_secs =
+        read_setting(conn, "verify_email_rate_limit_window_sec")
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(defaults.verify_email_rate_limit_window_secs)
+            .clamp(60, 86400);
     let verify_email_rate_limit_max = read_setting(conn, "verify_email_rate_limit_max")
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(defaults.verify_email_rate_limit_max)
@@ -4399,19 +5257,30 @@ fn generate_verify_token() -> String {
 
 fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSettingsResponse {
     let notify_cfg = state.notifier.runtime_config(conn);
+    let mail_reply_cfg = state.mail_reply.runtime_config(conn);
     let anti = resolve_anti_abuse_config(conn, &state.anti_abuse);
-    let captcha_provider_value = read_setting(conn, "captcha_provider")
+    let captcha_provider_value = read_setting(conn, "captcha_provider").or_else(|| {
+        state
+            .anti_abuse
+            .captcha
+            .as_ref()
+            .map(|cfg| cfg.provider.as_str().to_string())
+    });
+    let captcha_site_key_value = read_setting(conn, "captcha_site_key").or_else(|| {
+        state
+            .anti_abuse
+            .captcha
+            .as_ref()
+            .map(|cfg| cfg.site_key.clone())
+    });
+    let captcha_secret_set = read_setting(conn, "captcha_secret")
         .or_else(|| {
             state
                 .anti_abuse
                 .captcha
                 .as_ref()
-                .map(|cfg| cfg.provider.as_str().to_string())
-        });
-    let captcha_site_key_value = read_setting(conn, "captcha_site_key")
-        .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.site_key.clone()));
-    let captcha_secret_set = read_setting(conn, "captcha_secret")
-        .or_else(|| state.anti_abuse.captcha.as_ref().map(|cfg| cfg.secret.clone()))
+                .map(|cfg| cfg.secret.clone())
+        })
         .map(|v| !v.is_empty())
         .unwrap_or(false);
     LinkSettingsResponse {
@@ -4420,10 +5289,18 @@ fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSett
         smtp_host: notify_cfg.smtp.as_ref().map(|v| v.host.clone()),
         smtp_port: notify_cfg.smtp.as_ref().map(|v| v.port),
         smtp_user: notify_cfg.smtp.as_ref().and_then(|v| v.username.clone()),
-        smtp_pass_set: notify_cfg.smtp.as_ref().and_then(|v| v.password.clone()).is_some(),
+        smtp_pass_set: notify_cfg
+            .smtp
+            .as_ref()
+            .and_then(|v| v.password.clone())
+            .is_some(),
         smtp_from: notify_cfg.smtp.as_ref().map(|v| v.from.clone()),
         smtp_to: notify_cfg.smtp.as_ref().map(|v| v.to.join(",")),
-        smtp_starttls: notify_cfg.smtp.as_ref().map(|v| v.use_starttls).unwrap_or(true),
+        smtp_starttls: notify_cfg
+            .smtp
+            .as_ref()
+            .map(|v| v.use_starttls)
+            .unwrap_or(true),
         captcha_provider: captcha_provider_value,
         captcha_site_key: captcha_site_key_value,
         captcha_secret_set,
@@ -4438,6 +5315,22 @@ fn build_link_settings_response(state: &AppState, conn: &Connection) -> LinkSett
         verify_window_minutes: (anti.verify_window_secs / 60).max(10),
         public_base_url: anti.public_base_url.clone(),
         unreachable_whitelist_hosts: read_setting(conn, "unreachable_whitelist_hosts"),
+        imap_host: mail_reply_cfg.imap.as_ref().map(|v| v.host.clone()),
+        imap_port: mail_reply_cfg.imap.as_ref().map(|v| v.port),
+        imap_user: mail_reply_cfg.imap.as_ref().map(|v| v.username.clone()),
+        imap_pass_set: mail_reply_cfg
+            .imap
+            .as_ref()
+            .map(|v| !v.password.is_empty())
+            .unwrap_or(false),
+        imap_mailbox: mail_reply_cfg.imap.as_ref().map(|v| v.mailbox.clone()),
+        imap_tls: mail_reply_cfg
+            .imap
+            .as_ref()
+            .map(|v| v.use_tls)
+            .unwrap_or(true),
+        imap_poll_enabled: mail_reply_cfg.poll_enabled,
+        imap_poll_interval_sec: mail_reply_cfg.poll_interval_secs as i64,
     }
 }
 
@@ -4701,10 +5594,7 @@ fn client_ip(headers: &HeaderMap) -> Option<String> {
             return Some(ip);
         }
     }
-    if let Some(value) = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-    {
+    if let Some(value) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         for segment in value.split(',') {
             if let Some(ip) = parse_public_ip(segment) {
                 return Some(ip);

@@ -52,6 +52,11 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 - `LINK_SMTP_FROM` (optional, e.g. `bot@example.com`)
 - `LINK_SMTP_TO` (optional, receiver list separated by comma)
 - `LINK_SMTP_STARTTLS` (optional, default `true`, set `0`/`false` to disable)
+- `LINK_IMAP_POLL_ENABLED` (optional, default `false`, poll applicant replies)
+- `LINK_IMAP_HOST` / `LINK_IMAP_PORT` / `LINK_IMAP_USER` / `LINK_IMAP_PASS` (optional)
+- `LINK_IMAP_MAILBOX` (optional, default `INBOX`)
+- `LINK_IMAP_TLS` (optional, default `true`)
+- `LINK_IMAP_POLL_INTERVAL_SEC` (optional, default `300`, range `60~3600`)
 
 ### 友链风控 / Link Anti-abuse
 
@@ -152,6 +157,8 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
   Public backend does not crawl external sites; review/backlink checks are done by internal `review-reporter`.
 - 若申请记录包含 `email` 且 SMTP 可用，审核结果会自动邮件通知申请者。
   If an application has `email` and SMTP is configured, review results are emailed automatically.
+- 若自动邮件提示未检测到本站链接，申请者可直接回复邮件并附上其友链页面 URL；开启 IMAP 轮询后，后端会记录该 URL 并交给内网 `review-reporter` 优先复查。
+  If an auto email says no backlink was found, the applicant can reply with their friend-link page URL; with IMAP polling enabled, the backend stores that URL and passes it to `review-reporter` for prioritized review.
 - 72h 可通性检测支持白名单（管理后台 `可通性检测白名单`）。
   Unreachable removal supports a whitelist (admin setting: Unreachable whitelist).
 

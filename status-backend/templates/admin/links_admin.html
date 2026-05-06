@@ -145,7 +145,7 @@
             <strong>TG / SMTP 配置</strong>
             <div class="small" style="margin-top:6px;">
               SMTP 结果通知依赖以下字段：`SMTP Host`、`SMTP From`、`SMTP To`（站长收件箱）。
-              申请者回信通知会自动发往其申请邮箱。`SMTP Pass` 留空表示不修改，输入 `-` 表示清空。
+              申请者回信通知会自动发往其申请邮箱。`SMTP Pass` / `IMAP Pass` 留空表示不修改，输入 `-` 表示清空。
             </div>
             <div class="grid-2" style="margin-top:10px;">
               <div>
@@ -180,11 +180,43 @@
                 <label>SMTP To（逗号分隔）</label>
                 <input id="smtp_to" type="text" placeholder="如：owner@example.com,backup@example.com" />
               </div>
+              <div>
+                <label>IMAP Host（收取申请者回复，可选）</label>
+                <input id="imap_host" type="text" placeholder="如：imap.qq.com" />
+              </div>
+              <div>
+                <label>IMAP Port</label>
+                <input id="imap_port" type="number" placeholder="993 / 143" />
+              </div>
+              <div>
+                <label>IMAP User</label>
+                <input id="imap_user" type="text" placeholder="通常与 SMTP User 相同" />
+              </div>
+              <div>
+                <label>IMAP Pass（留空不改，输入 `-` 清空）</label>
+                <input id="imap_pass" type="password" placeholder="IMAP 密码/授权码" />
+              </div>
+              <div>
+                <label>IMAP Mailbox</label>
+                <input id="imap_mailbox" type="text" placeholder="INBOX" />
+              </div>
+              <div>
+                <label>IMAP 轮询间隔秒数</label>
+                <input id="imap_poll_interval_sec" type="number" min="60" max="3600" />
+              </div>
             </div>
             <div class="toolbar">
               <label class="row-inline small">
                 <input id="smtp_starttls" type="checkbox" style="width:auto;" checked />
                 启用 STARTTLS
+              </label>
+              <label class="row-inline small">
+                <input id="imap_tls" type="checkbox" style="width:auto;" checked />
+                IMAP TLS
+              </label>
+              <label class="row-inline small">
+                <input id="imap_poll_enabled" type="checkbox" style="width:auto;" />
+                收取友链页回复
               </label>
               <button id="save-settings">保存通知配置</button>
             </div>
@@ -323,6 +355,7 @@
 
       const readSettingsForm = () => {
         const passRaw = document.getElementById("smtp_pass").value.trim();
+        const imapPassRaw = document.getElementById("imap_pass").value.trim();
         const captchaSecretRaw = document.getElementById("captcha_secret").value.trim();
         return {
           tg_bot_token: document.getElementById("tg_bot_token").value.trim(),
@@ -334,6 +367,14 @@
           smtp_from: document.getElementById("smtp_from").value.trim(),
           smtp_to: document.getElementById("smtp_to").value.trim(),
           smtp_starttls: document.getElementById("smtp_starttls").checked,
+          imap_host: document.getElementById("imap_host").value.trim(),
+          imap_port: Number(document.getElementById("imap_port").value || 0) || null,
+          imap_user: document.getElementById("imap_user").value.trim(),
+          imap_pass: imapPassRaw === "" ? null : (imapPassRaw === "-" ? "" : imapPassRaw),
+          imap_mailbox: document.getElementById("imap_mailbox").value.trim(),
+          imap_tls: document.getElementById("imap_tls").checked,
+          imap_poll_enabled: document.getElementById("imap_poll_enabled").checked,
+          imap_poll_interval_sec: Number(document.getElementById("imap_poll_interval_sec").value || 0) || null,
           captcha_provider: document.getElementById("captcha_provider").value.trim() || null,
           captcha_site_key: document.getElementById("captcha_site_key").value.trim(),
           captcha_secret: captchaSecretRaw === "" ? null : (captchaSecretRaw === "-" ? "" : captchaSecretRaw),
@@ -361,6 +402,14 @@
         document.getElementById("smtp_from").value = cfg.smtp_from || "";
         document.getElementById("smtp_to").value = cfg.smtp_to || "";
         document.getElementById("smtp_starttls").checked = cfg.smtp_starttls !== false;
+        document.getElementById("imap_host").value = cfg.imap_host || "";
+        document.getElementById("imap_port").value = cfg.imap_port || "";
+        document.getElementById("imap_user").value = cfg.imap_user || "";
+        document.getElementById("imap_pass").value = "";
+        document.getElementById("imap_mailbox").value = cfg.imap_mailbox || "INBOX";
+        document.getElementById("imap_tls").checked = cfg.imap_tls !== false;
+        document.getElementById("imap_poll_enabled").checked = cfg.imap_poll_enabled === true;
+        document.getElementById("imap_poll_interval_sec").value = Number(cfg.imap_poll_interval_sec || 300);
         document.getElementById("captcha_provider").value = cfg.captcha_provider || "";
         document.getElementById("captcha_site_key").value = cfg.captcha_site_key || "";
         document.getElementById("captcha_secret").value = "";
@@ -404,6 +453,11 @@
             <div class="small">邮箱：${esc(item.email || "-")} | IP：${esc(item.ip || "-")}</div>
             <div class="small">简介：${esc(item.description || "-")}</div>
             <div class="small">备注：${esc(item.note || "-")}</div>
+            <div class="small">补充友链页：${item.backlink_page_url ? `<a href="${esc(item.backlink_page_url)}" target="_blank" rel="noreferrer">${esc(item.backlink_page_url)}</a>` : "-"}</div>
+            <div class="row" style="margin-top:8px;">
+              <div><input data-backlink-page placeholder="申请者补充的友链页 URL" value="${esc(item.backlink_page_url || "")}" /></div>
+              <div style="display:flex;align-items:flex-end;"><button class="ghost" data-save-backlink-page>保存友链页</button></div>
+            </div>
             <div class="row" style="margin-top:8px;">
               <div><input data-tags placeholder="通过时可附带 tags（逗号分隔）" /></div>
               <div><input data-sort type="number" placeholder="通过时 sort_order（默认当前时间）" /></div>
@@ -434,6 +488,29 @@
             await loadAll();
             setStatus(action === "approve" ? "已通过" : "已拒绝");
           };
+          wrap.querySelector("[data-save-backlink-page]").addEventListener("click", async () => {
+            try {
+              const url = wrap.querySelector("[data-backlink-page]").value.trim();
+              if (!url) {
+                setStatus("请先填写友链页 URL");
+                return;
+              }
+              setStatus("保存补充友链页中...");
+              const res = await fetch(api("/links/backlink-page"), {
+                method: "POST",
+                headers: authHeaders(),
+                body: JSON.stringify({ application_id: item.id, backlink_page_url: url })
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                throw new Error(data.message || "保存友链页失败");
+              }
+              await loadApplications();
+              setStatus(data.message || "已保存友链页");
+            } catch (err) {
+              setStatus(err.message || "保存友链页失败");
+            }
+          });
           wrap.querySelector("[data-approve]").addEventListener("click", async () => {
             try { await submitReview("approve"); } catch (err) { setStatus(err.message || "审核失败"); }
           });

@@ -1,6 +1,8 @@
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[path = "../env_loader.rs"]
+mod env_loader;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -28,6 +30,7 @@ struct PendingApplicationTask {
     avatar_url: Option<String>,
     description: Option<String>,
     note: Option<String>,
+    backlink_page_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +39,7 @@ struct ActiveLinkTask {
     url: String,
     application_id: Option<i64>,
     backlink_deadline: Option<i64>,
+    backlink_page_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -86,6 +90,7 @@ struct WorkerConfig {
 
 #[tokio::main]
 async fn main() {
+    env_loader::load_env_files();
     let base =
         std::env::var("REVIEW_API_BASE").unwrap_or_else(|_| "http://127.0.0.1:7999".to_string());
     let token = std::env::var("REVIEW_REPORT_TOKEN").unwrap_or_else(|_| "KFCVME50".to_string());
@@ -235,6 +240,7 @@ async fn run_once_cycle(
             &link.url,
             &tasks.backlink_target,
             snap.as_ref().map(|(_, html)| html.as_str()),
+            link.backlink_page_url.as_deref(),
             worker_config,
         )
         .await;
@@ -374,6 +380,7 @@ async fn evaluate_application(
                 &app.site_url,
                 backlink_target,
                 Some(&html),
+                app.backlink_page_url.as_deref(),
                 worker_config,
             )
             .await
@@ -621,6 +628,7 @@ async fn find_backlink_in_site(
     site_url: &str,
     backlink_target: &str,
     homepage_html: Option<&str>,
+    explicit_backlink_page_url: Option<&str>,
     worker_config: &WorkerConfig,
 ) -> bool {
     let base = match Url::parse(site_url) {
@@ -645,7 +653,11 @@ async fn find_backlink_in_site(
         return true;
     }
 
-    let mut candidates = collect_friend_page_candidates(&base, &home_html_owned);
+    let mut candidates = explicit_backlink_page_url
+        .and_then(|url| normalize_explicit_backlink_page_url(&base, url))
+        .into_iter()
+        .collect::<Vec<_>>();
+    candidates.append(&mut collect_friend_page_candidates(&base, &home_html_owned));
     let mut dynamic_candidates = collect_dynamic_page_candidates(&base, &home_html_owned);
     candidates.append(&mut dynamic_candidates);
 
@@ -657,10 +669,8 @@ async fn find_backlink_in_site(
                 if contains_backlink(&rendered_lower, backlink_target) {
                     return true;
                 }
-                let mut rendered_candidates =
-                    collect_friend_page_candidates(&base, &rendered_html);
-                let mut rendered_dynamic =
-                    collect_dynamic_page_candidates(&base, &rendered_html);
+                let mut rendered_candidates = collect_friend_page_candidates(&base, &rendered_html);
+                let mut rendered_dynamic = collect_dynamic_page_candidates(&base, &rendered_html);
                 rendered_candidates.append(&mut rendered_dynamic);
                 candidates.splice(0..0, rendered_candidates);
             }
@@ -995,6 +1005,19 @@ fn contains_backlink(page_lower: &str, backlink_target: &str) -> bool {
     candidates.iter().any(|needle| page_lower.contains(needle))
 }
 
+fn normalize_explicit_backlink_page_url(base: &Url, raw: &str) -> Option<String> {
+    let parsed = Url::parse(raw.trim()).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let base_host = base.host_str()?.trim_start_matches("www.").to_lowercase();
+    let target_host = parsed.host_str()?.trim_start_matches("www.").to_lowercase();
+    if target_host != base_host && !target_host.ends_with(&format!(".{}", base_host)) {
+        return None;
+    }
+    Some(parsed.to_string())
+}
+
 fn contains_spam_keyword(content: &str) -> bool {
     let text = content.to_lowercase();
     let spam_words = [
@@ -1187,9 +1210,7 @@ impl WorkerConfig {
                 wait_until: std::env::var("REVIEW_JS_RENDER_WAIT_UNTIL")
                     .ok()
                     .map(|v| v.trim().to_lowercase())
-                    .filter(|v| {
-                        matches!(v.as_str(), "load" | "domcontentloaded" | "networkidle")
-                    })
+                    .filter(|v| matches!(v.as_str(), "load" | "domcontentloaded" | "networkidle"))
                     .unwrap_or_else(|| "networkidle".to_string()),
                 wait_after_ms: std::env::var("REVIEW_JS_RENDER_WAIT_AFTER_MS")
                     .ok()
