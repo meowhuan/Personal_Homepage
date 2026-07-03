@@ -43,7 +43,7 @@ const fallbackPosts = [
   }
 ];
 
-const blogApiBase = "https://m.ratf.cn/blog";
+const blogApiBase = "https://m.meowra.cn/blog";
 const posts = ref([]);
 const activePost = ref(null);
 const searchQuery = ref("");

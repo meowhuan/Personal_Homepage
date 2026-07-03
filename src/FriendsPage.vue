@@ -1,11 +1,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
-const LINKS_API_BASE = "https://m.ratf.cn/links";
-const APPLY_API_URL = "https://m.ratf.cn/links/apply";
-const APPLY_CONFIG_URL = "https://m.ratf.cn/links/apply/config";
-const VERIFY_HTTP_URL = "https://m.ratf.cn/links/verify/http";
-const VERIFY_EMAIL_SEND_URL = "https://m.ratf.cn/links/verify/email/send";
+const LINKS_API_BASE = "https://m.meowra.cn/links";
+const APPLY_API_URL = "https://m.meowra.cn/links/apply";
+const APPLY_CONFIG_URL = "https://m.meowra.cn/links/apply/config";
+const VERIFY_HTTP_URL = "https://m.meowra.cn/links/verify/http";
+const VERIFY_EMAIL_SEND_URL = "https://m.meowra.cn/links/verify/email/send";
 const APPLY_CAPTCHA_CONTAINER_ID = "friend-link-captcha";
 const EMAIL_CAPTCHA_CONTAINER_ID = "friend-link-email-captcha";
 

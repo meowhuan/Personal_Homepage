@@ -175,6 +175,7 @@ const onProjectsPointerUp = (event) => {
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#projects">项目</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/blog.html">博客</a>
+            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/disk.html">硬盘状态</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/friends.html">友链</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="https://live.meowra.cn" target="_blank" rel="noreferrer">直播</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
