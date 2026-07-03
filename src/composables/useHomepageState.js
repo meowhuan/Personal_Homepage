@@ -164,7 +164,7 @@ export function useHomepageState() {
     if (!canFetchQuote()) return;
     quoteLoading.value = true;
     nextQuoteAt.value = Date.now() + quoteCooldownMs;
-    fetch("https://v1.meowra.cn")
+    fetch("https://v1.hitokoto.cn")
       .then((res) => res.json())
       .then((data) => {
         quoteText.value = data?.hitokoto || QUOTE_FALLBACK;
