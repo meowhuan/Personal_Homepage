@@ -1,10 +1,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
-const STATUS_URL = "https://m.ratf.cn/status";
-const SCHEDULE_URL = "https://m.ratf.cn/schedule";
-const BLOG_URL = "https://m.ratf.cn/blog";
-const VISITOR_URL = "https://m.ratf.cn/visitor";
-const VISITOR_VISIT_URL = "https://m.ratf.cn/visitor/visit";
+const STATUS_URL = "https://m.meowra.cn/status";
+const SCHEDULE_URL = "https://m.meowra.cn/schedule";
+const BLOG_URL = "https://m.meowra.cn/blog";
+const VISITOR_URL = "https://m.meowra.cn/visitor";
+const VISITOR_VISIT_URL = "https://m.meowra.cn/visitor/visit";
 const STREAM_STATUS_URL = "https://lives.meowra.cn/api/stream/status";
 const VISITOR_ID_KEY = "meow-visitor-id";
 const QUOTE_FALLBACK = "今天也要温柔一点。";
