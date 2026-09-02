@@ -51,6 +51,12 @@ const gratitudeList = ref([
     name: "梁逸",
     channel: "爱发电",
   },
+  {
+    date: "2026-08-04 01:16:17",
+    amount: 30,
+    name: "韩依",
+    channel: "爱发电",
+  },
 ]);
 </script>
 
