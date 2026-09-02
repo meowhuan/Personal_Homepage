@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meow 管理后台</title>
+    <link rel="stylesheet" href="/admin/common.css" />
+    <script src="/admin/common.js"></script>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="window">
+        <div class="titlebar"><span class="dot"></span>Meow Admin Console</div>
+        <div class="content">
+          <div class="admin-hero">
+            <div>
+              <div class="eyebrow">CONTROL CENTER</div>
+              <h1>欢迎回来</h1>
+              <p class="hint">在这里集中管理在线状态、行程、博客和友链。</p>
+            </div>
+            <span class="admin-badge">后台首页</span>
+          </div>
+          <div class="admin-cards">
+            <a class="admin-card" href="/status/admin">
+              <span class="admin-card-icon">◉</span>
+              <strong>在线状态</strong>
+              <span class="hint">设备状态与手动离线</span>
+            </a>
+            <a class="admin-card" href="/schedule/admin">
+              <span class="admin-card-icon">⌁</span>
+              <strong>行程表</strong>
+              <span class="hint">编辑公开行程</span>
+            </a>
+            <a class="admin-card" href="/blog/admin">
+              <span class="admin-card-icon">✎</span>
+              <strong>博客</strong>
+              <span class="hint">管理文章与 Markdown</span>
+            </a>
+            <a class="admin-card" href="/links/admin">
+              <span class="admin-card-icon">∞</span>
+              <strong>友链</strong>
+              <span class="hint">审核申请与站点配置</span>
+            </a>
+          </div>
+          <div class="panel admin-note">
+            <strong>管理提示</strong>
+            <div class="hint">登录状态由服务端会话 Cookie 维护。关闭浏览器或点击退出后，需要重新使用管理员邮箱登录。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

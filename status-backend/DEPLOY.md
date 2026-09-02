@@ -32,6 +32,9 @@ Minimum required:
 
 ```
 STATUS_TOKEN=your_token
+# 可选：旧部署兼容。新部署首次访问 /admin 时直接注册
+# ADMIN_EMAIL=admin@example.com
+# ADMIN_PASSWORD=change-this-password
 ```
 
 常用可选项：
@@ -208,6 +211,8 @@ npm install playwright
   Enable CAPTCHA and rate limit settings for the public backend (see `status-backend/README.md`).
 - `LINK_REVIEW_REPORT_TOKEN` 建议与 `STATUS_TOKEN` 分离，避免内网 token 泄漏风险。
   Keep `LINK_REVIEW_REPORT_TOKEN` separate from `STATUS_TOKEN` when possible.
+- 生产环境请通过 HTTPS 访问 `/admin`；新部署无需配置管理员邮箱和密码环境变量，首次访问后台即可注册。
+  Serve `/admin` over HTTPS; new deployments can register the administrator on first access without environment variables.
 
 单次排障运行示例：
 One-shot debug run:

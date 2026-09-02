@@ -175,7 +175,6 @@ const onProjectsPointerUp = (event) => {
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#stuff">我在做</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#projects">项目</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/blog.html">博客</a>
-            <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/mypc.html">我的电脑</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="/friends.html">友链</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="https://live.meowra.cn" target="_blank" rel="noreferrer">直播</a>
             <a class="nav-link" :class="isNight ? 'hover:text-meow-night-ink' : 'hover:text-meow-ink'" href="#contact">联系</a>
@@ -589,6 +588,24 @@ const onProjectsPointerUp = (event) => {
               style="--float-delay: 0.1s"
               :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
             >
+              <h3 class="text-base font-600">BlissOS For Surface Pro 9</h3>
+              <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                为 Surface Pro 9 设备移植 BlissOS 的项目，包含内核、驱动、补丁等内容，持续维护中。
+              </p>
+              <a
+                class="meow-pill motion-press mt-4 inline-flex"
+                href="https://github.com/meowhuan/blissos-surface-build"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看项目
+              </a>
+            </article>
+            <article
+              class="meow-card motion-card project-card p-5"
+              style="--float-delay: 0.1s"
+              :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+            >
               <h3 class="text-base font-600">Oyama's HRT Tracker</h3>
               <p class="mt-3 text-sm leading-relaxed" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
                 为记录与跟踪 HRT 过程的前端小工具编写的后端程序，基本完善，不定期维护。
@@ -674,6 +691,35 @@ const onProjectsPointerUp = (event) => {
                 查看项目
               </a>
             </article>
+            </div>
+          </div>
+          <div
+            class="meow-card motion-card mt-6 p-5 backdrop-blur"
+            :class="isNight ? 'bg-meow-night-card/80 border-meow-night-line' : ''"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 class="text-base font-600">GitHub 贡献表</h3>
+                <p class="mt-1 text-xs" :class="isNight ? 'text-meow-night-soft' : 'text-meow-soft'">
+                  最近一年的公开贡献记录
+                </p>
+              </div>
+              <a
+                class="meow-pill motion-press"
+                href="https://github.com/meowhuan"
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看 GitHub
+              </a>
+            </div>
+            <div class="github-contribution-wrap mt-4">
+              <img
+                class="github-contribution-chart"
+                src="https://ghchart.rshah.org/meowhuan"
+                alt="Meowhuan 的 GitHub 贡献表"
+                loading="lazy"
+              />
             </div>
           </div>
         </section>

@@ -7,7 +7,10 @@ This repo contains a personal homepage and an online status system (backend + cl
 ## 结构 / Structure
 
 - `src/`：个人主页（Vite + Vue3 + UnoCSS）
+  - 主页 / 博客 / 友链 / 赞助
 - `status-backend/`：在线状态后端（Rust + SQLite）
+  - 设备心跳、日程、博客、友链管理
+  - `/admin` 统一管理后台首页，使用管理员邮箱登录
 - `status-client-rust/`：Windows / Linux 客户端（静默心跳)
 - `status-client-android/`：Android 方案（AutoX.js / Magisk shell）
 
@@ -25,6 +28,8 @@ npm run dev
 ### 2) 后端 / Backend
 
 见 / See `status-backend/README.md` + `status-backend/DEPLOY.md`
+
+管理后台从 `/admin` 进入，首次访问时直接注册管理员邮箱和密码。
 
 ### 3) 客户端 / Clients
 

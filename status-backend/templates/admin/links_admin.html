@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Meow 友链管理</title>
     <link rel="stylesheet" href="/admin/common.css" />
+    <script src="/admin/common.js"></script>
     <style>
       .wrap { max-width: 1120px; }
       input, textarea {
@@ -98,10 +99,6 @@
         <div class="titlebar"><span class="dot"></span>Meow Links Admin</div>
         <div class="content">
           <div class="row">
-            <div>
-              <label>Token</label>
-              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
-            </div>
             <div>
               <label>接口根路径</label>
               <input id="base" type="text" value="" placeholder="留空表示同域名" />
@@ -316,7 +313,6 @@
     <script>
       const statusEl = document.getElementById("status");
       const logListEl = document.getElementById("log-list");
-      const tokenEl = document.getElementById("token");
       const baseEl = document.getElementById("base");
       const appListEl = document.getElementById("app-list");
       const verifyListEl = document.getElementById("verify-list");
@@ -349,8 +345,7 @@
         .replaceAll(">", "&gt;")
         .replaceAll("\"", "&quot;");
       const authHeaders = () => ({
-        "content-type": "application/json",
-        "x-token": tokenEl.value.trim()
+        "content-type": "application/json"
       });
       const ts = (value) => new Date(Number(value || 0) * 1000).toLocaleString("zh-CN");
 

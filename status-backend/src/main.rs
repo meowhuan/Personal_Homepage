@@ -1,8 +1,12 @@
 mod admin_pages;
 mod env_loader;
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -13,14 +17,18 @@ use lettre::{
     transport::smtp::authentication::Credentials,
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
+use rand::RngCore;
 use reqwest::Url;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -37,6 +45,9 @@ use trust_dns_resolver::{
 };
 
 const VERIFY_EXPIRED_CLEANUP_GRACE_SECS: i64 = 12 * 60 * 60;
+const ADMIN_SESSION_COOKIE: &str = "meow_admin_session";
+const ADMIN_SESSION_TTL_SECS: i64 = 8 * 60 * 60;
+static ADMIN_SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 struct AppState {
@@ -47,6 +58,18 @@ struct AppState {
     auto_review: Arc<AutoReviewConfig>,
     anti_abuse: Arc<AntiAbuseConfig>,
     mail_reply: Arc<MailReplyConfig>,
+    admin: Arc<AdminAuth>,
+}
+
+#[derive(Clone)]
+struct AdminAuth {
+    sessions: Arc<Mutex<HashMap<String, AdminSession>>>,
+}
+
+#[derive(Clone)]
+struct AdminSession {
+    email: String,
+    expires_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -187,6 +210,19 @@ struct VersionInfo {
     service: String,
     version: String,
     music_fields: bool,
+}
+
+#[derive(Deserialize)]
+struct AdminLoginPayload {
+    email: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct AdminSessionResponse {
+    authenticated: bool,
+    email: Option<String>,
+    registered: bool,
 }
 
 #[derive(Serialize)]
@@ -598,7 +634,10 @@ async fn main() {
         .init();
 
     let db_path = std::env::var("STATUS_DB").unwrap_or_else(|_| "status.db".to_string());
-    let token = std::env::var("STATUS_TOKEN").unwrap_or_else(|_| "KFCVME50".to_string());
+    let token = normalize_env("STATUS_TOKEN").unwrap_or_default();
+    if token.is_empty() {
+        tracing::warn!("STATUS_TOKEN 未配置，设备心跳和 token API 将不可用");
+    }
     let review_report_token =
         std::env::var("LINK_REVIEW_REPORT_TOKEN").unwrap_or_else(|_| token.clone());
     let port = std::env::var("STATUS_PORT")
@@ -611,7 +650,6 @@ async fn main() {
     let auto_review = Arc::new(AutoReviewConfig::from_env());
     let anti_abuse = Arc::new(AntiAbuseConfig::from_env());
     let mail_reply = Arc::new(MailReplyConfig::from_env());
-
     let conn = Connection::open(db_path).expect("open db");
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS device_status (
@@ -630,6 +668,12 @@ async fn main() {
             id INTEGER PRIMARY KEY CHECK (id = 1),
             global_manual_offline INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS schedule_items (
             id TEXT PRIMARY KEY,
@@ -778,6 +822,9 @@ async fn main() {
         params![now_ts()],
     );
 
+    // 兼容已有通过环境变量配置的部署；新部署可直接从后台注册。
+    seed_admin_from_env(&conn);
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         token,
@@ -786,6 +833,9 @@ async fn main() {
         auto_review,
         anti_abuse,
         mail_reply,
+        admin: Arc::new(AdminAuth {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }),
     };
     spawn_mail_reply_worker(state.clone());
 
@@ -810,6 +860,11 @@ async fn main() {
             }),
         )
         .route("/heartbeat", post(heartbeat))
+        .route("/admin", get(admin_pages::admin_index_page))
+        .route("/admin/login", post(admin_login))
+        .route("/admin/register", post(admin_register))
+        .route("/admin/logout", post(admin_logout))
+        .route("/admin/session", get(admin_session))
         .route("/device", get(delete_device))
         .route("/device/status", post(device_status_update))
         .route("/status", get(status))
@@ -819,6 +874,7 @@ async fn main() {
         )
         .route("/status/admin", get(admin_pages::status_admin_page))
         .route("/admin/common.css", get(admin_pages::admin_common_css))
+        .route("/admin/common.js", get(admin_pages::admin_common_js))
         .route("/schedule", get(schedule_list).post(schedule_update))
         .route("/schedule/admin", get(admin_pages::schedule_admin_page))
         .route("/blog", get(blog_list).post(blog_update))
@@ -874,12 +930,164 @@ async fn main() {
         .unwrap();
 }
 
+async fn admin_login(
+    State(state): State<AppState>,
+    Json(payload): Json<AdminLoginPayload>,
+) -> impl IntoResponse {
+    let email = payload.email.trim();
+    let account = {
+        let conn = state.db.lock().unwrap();
+        load_admin_account(&conn).ok().flatten()
+    };
+    let Some((account_email, password_hash)) = account else {
+        return (
+            StatusCode::PRECONDITION_REQUIRED,
+            Json(serde_json::json!({
+                "error": "尚未注册管理员账户",
+                "code": "registration_required"
+            })),
+        )
+            .into_response();
+    };
+    let valid = email.eq_ignore_ascii_case(&account_email)
+        && verify_admin_password(&payload.password, &password_hash);
+    if !valid {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "邮箱或密码错误" })),
+        )
+            .into_response();
+    }
+
+    let session_id = new_admin_session_id();
+    state.admin.sessions.lock().unwrap().insert(
+        session_id.clone(),
+        AdminSession {
+            email: account_email.clone(),
+            expires_at: now_ts() + ADMIN_SESSION_TTL_SECS,
+        },
+    );
+    let cookie = format!(
+        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
+        ADMIN_SESSION_COOKIE, session_id, ADMIN_SESSION_TTL_SECS
+    );
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(AdminSessionResponse {
+            authenticated: true,
+            email: Some(account_email),
+            registered: true,
+        }),
+    )
+        .into_response()
+}
+
+async fn admin_register(
+    State(state): State<AppState>,
+    Json(payload): Json<AdminLoginPayload>,
+) -> impl IntoResponse {
+    let email = payload.email.trim().to_lowercase();
+    if !email.contains('@') || email.len() > 254 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "请输入有效的管理员邮箱" })),
+        )
+            .into_response();
+    }
+    if payload.password.chars().count() < 8 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "管理员密码至少需要 8 位" })),
+        )
+            .into_response();
+    }
+
+    let password_hash = match hash_admin_password(&payload.password) {
+        Ok(hash) => hash,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "管理员密码处理失败" })),
+            )
+                .into_response()
+        }
+    };
+    let now = now_ts();
+    let result = {
+        let conn = state.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO admin_users (id, email, password_hash, created_at) VALUES (1, ?1, ?2, ?3)",
+            params![email, password_hash, now],
+        )
+    };
+    if result.is_err() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "管理员账户已存在，请直接登录" })),
+        )
+            .into_response();
+    }
+
+    let session_id = new_admin_session_id();
+    state.admin.sessions.lock().unwrap().insert(
+        session_id.clone(),
+        AdminSession {
+            email: email.clone(),
+            expires_at: now + ADMIN_SESSION_TTL_SECS,
+        },
+    );
+    let cookie = admin_session_cookie(&session_id, ADMIN_SESSION_TTL_SECS);
+    (
+        StatusCode::CREATED,
+        [(header::SET_COOKIE, cookie)],
+        Json(AdminSessionResponse {
+            authenticated: true,
+            email: Some(email),
+            registered: true,
+        }),
+    )
+        .into_response()
+}
+
+async fn admin_logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Some(session_id) = cookie_value(&headers, ADMIN_SESSION_COOKIE) {
+        state.admin.sessions.lock().unwrap().remove(&session_id);
+    }
+    let cookie = format!(
+        "{}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+        ADMIN_SESSION_COOKIE
+    );
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(AdminSessionResponse {
+            authenticated: false,
+            email: None,
+            registered: true,
+        }),
+    )
+}
+
+async fn admin_session(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let email = admin_session_email(&headers, &state.admin);
+    let registered = {
+        let conn = state.db.lock().unwrap();
+        load_admin_account(&conn).ok().flatten().is_some()
+    };
+    Json(AdminSessionResponse {
+        authenticated: email.is_some(),
+        email,
+        registered,
+    })
+}
+
 async fn heartbeat(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<Heartbeat>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED;
     }
 
@@ -1017,7 +1225,7 @@ async fn schedule_update(
     headers: HeaderMap,
     Json(payload): Json<SchedulePayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED;
     }
 
@@ -1119,7 +1327,7 @@ async fn set_manual_status(
     headers: HeaderMap,
     Json(payload): Json<ManualStatusPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let now = now_ts();
@@ -1152,7 +1360,7 @@ async fn device_status_update(
     headers: HeaderMap,
     Json(payload): Json<DeviceStatusUpdatePayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED;
     }
 
@@ -1306,7 +1514,7 @@ async fn blog_update(
     headers: HeaderMap,
     Json(payload): Json<BlogPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED;
     }
 
@@ -2274,7 +2482,7 @@ async fn links_verify_reset(
     headers: HeaderMap,
     Json(payload): Json<LinkVerifyResetPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let anti_abuse = {
@@ -2344,7 +2552,7 @@ async fn links_verify_release(
     headers: HeaderMap,
     Json(payload): Json<LinkVerifyReleasePayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let now = now_ts();
@@ -2421,7 +2629,7 @@ async fn links_applications(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let conn = state.db.lock().unwrap();
@@ -2479,7 +2687,7 @@ async fn links_review(
     headers: HeaderMap,
     Json(payload): Json<LinkReviewPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match perform_review_decision(&state, payload, true, false).await {
@@ -2499,7 +2707,7 @@ async fn links_backlink_page_update(
     headers: HeaderMap,
     Json(payload): Json<LinkBacklinkPagePayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match store_backlink_page_url(
@@ -2526,7 +2734,7 @@ async fn links_review_report_decision(
     headers: HeaderMap,
     Json(payload): Json<ReviewDecisionReportPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.review_report_token) {
+    if !authorized(&headers, &state.review_report_token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let review_payload = LinkReviewPayload {
@@ -2560,7 +2768,7 @@ async fn links_review_report_manual(
     headers: HeaderMap,
     Json(payload): Json<ReviewManualReportPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.review_report_token) {
+    if !authorized(&headers, &state.review_report_token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let now = now_ts();
@@ -2678,7 +2886,7 @@ async fn links_review_report_tasks(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.review_report_token) {
+    if !authorized(&headers, &state.review_report_token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let conn = state.db.lock().unwrap();
@@ -2776,7 +2984,7 @@ async fn links_review_report_removal(
     headers: HeaderMap,
     Json(payload): Json<ReviewRemovalReportPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.review_report_token) {
+    if !authorized(&headers, &state.review_report_token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let now = now_ts();
@@ -3054,7 +3262,7 @@ async fn links_sort(
     headers: HeaderMap,
     Json(payload): Json<LinkSortPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let mut conn = state.db.lock().unwrap();
@@ -3090,7 +3298,7 @@ async fn links_update(
     headers: HeaderMap,
     Json(payload): Json<LinkUpdatePayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let id = payload.id.trim();
@@ -3172,7 +3380,7 @@ async fn links_delete(
     headers: HeaderMap,
     Json(payload): Json<LinkDeletePayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let id = payload.id.trim();
@@ -3212,7 +3420,7 @@ async fn links_review_stage_cancel(
     headers: HeaderMap,
     Json(payload): Json<LinkReviewStageCancelPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let id = payload.id.trim();
@@ -3257,7 +3465,7 @@ async fn links_settings_get(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let conn = state.db.lock().unwrap();
@@ -3270,7 +3478,7 @@ async fn links_settings_set(
     headers: HeaderMap,
     Json(payload): Json<LinkSettingsPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let now = now_ts();
@@ -3557,7 +3765,7 @@ async fn links_settings_test_smtp(
     headers: HeaderMap,
     Json(payload): Json<SmtpTestPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let recipient = normalize_optional(payload.recipient, 255);
@@ -3609,7 +3817,7 @@ async fn links_settings_test_imap(
     headers: HeaderMap,
     Json(payload): Json<ImapTestPayload>,
 ) -> impl IntoResponse {
-    if !authorized(&headers, &state.token) {
+    if !authorized(&headers, &state.token, &state.admin) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let mail_reply_cfg = {
@@ -4438,7 +4646,7 @@ async fn delete_device(
     State(state): State<AppState>,
     Query(q): Query<DeleteQuery>,
 ) -> impl IntoResponse {
-    if q.token != state.token {
+    if state.token.is_empty() || q.token != state.token {
         return StatusCode::UNAUTHORIZED;
     }
     let conn = state.db.lock().unwrap();
@@ -5677,7 +5885,10 @@ fn ip_prefix_key(ip: &str) -> Option<String> {
     }
 }
 
-fn authorized(headers: &HeaderMap, token: &str) -> bool {
+fn authorized(headers: &HeaderMap, token: &str, admin: &AdminAuth) -> bool {
+    if admin_session_email(headers, admin).is_some() {
+        return true;
+    }
     if let Some(value) = headers.get("x-token") {
         if value.to_str().ok() == Some(token) {
             return true;
@@ -5691,6 +5902,102 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
         }
     }
     false
+}
+
+fn new_admin_session_id() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let counter = ADMIN_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut value = String::with_capacity(80);
+    for byte in bytes {
+        value.push_str(&format!("{:02x}", byte));
+    }
+    value.push_str(&format!("{:016x}", counter));
+    value
+}
+
+fn admin_session_cookie(session_id: &str, max_age: i64) -> String {
+    format!(
+        "{}={}; Path=/; Max-Age={}; HttpOnly; SameSite=Lax",
+        ADMIN_SESSION_COOKIE, session_id, max_age
+    )
+}
+
+fn hash_admin_password(password: &str) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|err| err.to_string())
+}
+
+fn verify_admin_password(password: &str, password_hash: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(password_hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
+}
+
+fn load_admin_account(conn: &Connection) -> Result<Option<(String, String)>, rusqlite::Error> {
+    match conn.query_row(
+        "SELECT email, password_hash FROM admin_users WHERE id = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ) {
+        Ok(account) => Ok(Some(account)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn seed_admin_from_env(conn: &Connection) {
+    if load_admin_account(conn).ok().flatten().is_some() {
+        return;
+    }
+    let Some(email) = normalize_env("ADMIN_EMAIL") else {
+        return;
+    };
+    let Ok(password) = std::env::var("ADMIN_PASSWORD") else {
+        return;
+    };
+    if password.is_empty() {
+        return;
+    }
+    let Ok(password_hash) = hash_admin_password(&password) else {
+        tracing::warn!("无法使用环境变量初始化管理员账户");
+        return;
+    };
+    if conn
+        .execute(
+            "INSERT INTO admin_users (id, email, password_hash, created_at) VALUES (1, ?1, ?2, ?3)",
+            params![email, password_hash, now_ts()],
+        )
+        .is_ok()
+    {
+        tracing::info!("已使用环境变量初始化管理员账户");
+    }
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    raw.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        (key == name).then(|| value.trim().to_string())
+    })
+}
+
+fn admin_session_email(headers: &HeaderMap, admin: &AdminAuth) -> Option<String> {
+    let session_id = cookie_value(headers, ADMIN_SESSION_COOKIE)?;
+    let now = now_ts();
+    let mut sessions = admin.sessions.lock().ok()?;
+    let session = sessions.get(&session_id)?.clone();
+    if session.expires_at <= now {
+        sessions.remove(&session_id);
+        return None;
+    }
+    Some(session.email)
 }
 
 fn is_global_manual_offline(conn: &Connection) -> bool {

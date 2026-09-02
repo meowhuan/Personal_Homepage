@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Meow 在线状态管理</title>
     <link rel="stylesheet" href="/admin/common.css" />
+    <script src="/admin/common.js"></script>
     <style>
       .wrap {
         max-width: 980px;
@@ -85,10 +86,6 @@
         <div class="content">
           <div class="row">
             <div>
-              <label>Token</label>
-              <input id="token" type="password" placeholder="输入 STATUS_TOKEN" />
-            </div>
-            <div>
               <label>接口根路径</label>
               <input id="base" type="text" value="" placeholder="留空表示同域名" />
             </div>
@@ -137,7 +134,6 @@
       </div>
     </div>
     <script>
-      const tokenEl = document.getElementById("token");
       const baseEl = document.getElementById("base");
       const statusEl = document.getElementById("status");
       const globalEl = document.getElementById("global-manual");
@@ -148,8 +144,7 @@
       const api = (path) => `${baseEl.value.trim()}${path}`;
 
       const headers = () => ({
-        "content-type": "application/json",
-        "x-token": tokenEl.value.trim()
+        "content-type": "application/json"
       });
 
       const renderDevices = (items) => {

@@ -37,7 +37,8 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 
 - `STATUS_PORT` (default `7999`)
 - `STATUS_DB` (default `status.db`)
-- `STATUS_TOKEN` (required for protected APIs)
+- `STATUS_TOKEN` (required for device heartbeat and reporter APIs)
+- `ADMIN_EMAIL` / `ADMIN_PASSWORD` (optional compatibility bootstrap for the first admin account)
 - `STATUS_BUILD` (optional, shown in `/version`)
 - `RUST_LOG` (optional, e.g. `info`)
 
@@ -96,8 +97,14 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 
 ## 鉴权 / Auth
 
-- 需要 token 的接口支持请求头 `x-token` 或 `authorization: Bearer TOKEN`。
-  Protected endpoints accept `x-token` or `authorization: Bearer TOKEN`.
+- 管理后台从 `/admin` 进入。首次数据库为空时直接注册管理员邮箱和密码；登录后由 HttpOnly 会话 Cookie 鉴权。
+  The web admin starts at `/admin`. When the database has no account, register the first admin email and password; authenticated requests use an HttpOnly session cookie.
+- 旧部署如果仍配置 `ADMIN_EMAIL` / `ADMIN_PASSWORD`，服务首次启动时会自动初始化管理员账户；新部署无需设置它们。
+  Existing deployments may keep `ADMIN_EMAIL` / `ADMIN_PASSWORD` for automatic bootstrap; new deployments do not need these variables.
+- 设备心跳和内网审查上报仍使用 token 请求头，不与网页登录凭据混用。
+  Device heartbeats and internal review reports continue to use token headers and are separate from web admin credentials.
+- 仍兼容 `x-token` 或 `authorization: Bearer TOKEN`，便于客户端和自动化脚本调用。
+  `x-token` and `authorization: Bearer TOKEN` remain supported for clients and automation.
 - `GET /device` 使用 query 参数 `token` 进行鉴权。
   `GET /device` uses the query param `token` for auth.
 
@@ -105,6 +112,8 @@ Configuration is read from `status-backend/.env` (see `.env.example`).
 
 - `GET /` (health)
 - `GET /version` (version info)
+- `GET /admin` (unified admin home)
+- `POST /admin/login` / `POST /admin/register` / `POST /admin/logout` / `GET /admin/session` (email login session)
 - `POST /heartbeat` (token)
 - `GET /status`
 - `GET /status/manual`

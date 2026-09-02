@@ -4,6 +4,11 @@ use axum::{
 };
 
 const ADMIN_COMMON_CSS: &str = include_str!("../templates/admin/common.css");
+const ADMIN_COMMON_JS: &str = include_str!("../templates/admin/common.js");
+
+pub async fn admin_index_page() -> impl IntoResponse {
+    Html(include_str!("../templates/admin/index.html"))
+}
 
 pub async fn schedule_admin_page() -> impl IntoResponse {
     Html(include_str!("../templates/admin/schedule_admin.html"))
@@ -25,5 +30,15 @@ pub async fn admin_common_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         ADMIN_COMMON_CSS,
+    )
+}
+
+pub async fn admin_common_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        ADMIN_COMMON_JS,
     )
 }
